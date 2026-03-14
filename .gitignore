@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Server build output (not needed for GH Pages deployment)
+dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# NOTE: docs/ is intentionally NOT ignored — it's the GitHub Pages deployment folder
