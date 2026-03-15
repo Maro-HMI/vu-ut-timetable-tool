@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import {
   FiEye, FiEyeOff, FiLock, FiUnlock, FiPlus, FiTrash2, FiSettings,
-  FiDownload, FiUpload, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter,
+  FiDownload, FiUpload, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter, FiHelpCircle,
 } from 'react-icons/fi';
 
 /* ── Constants ─────────────────────────────────────────── */
@@ -142,16 +142,18 @@ function ModuleDialog({
         <div className="space-y-4 py-1">
           <div className="space-y-1.5">
             <Label className="text-xs">Module Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Design Engineering M4" className="h-8 text-sm" />
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. M1 Foundations of CreaTe" className="h-8 text-sm" />
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">First Monday</Label>
-            <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-8 text-sm" />
-            <p className="text-[10px] text-muted-foreground">Pick the Monday of week 1.</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Number of Weeks</Label>
-            <Input type="number" min={1} max={52} value={numWeeks} onChange={e => setNumWeeks(Number(e.target.value))} className="h-8 text-sm" />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">First Monday</Label>
+              <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-8 text-sm" />
+              <p className="text-[10px] text-muted-foreground">Week 1 start.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Number of Weeks</Label>
+              <Input type="number" min={1} max={52} value={numWeeks} onChange={e => setNumWeeks(Number(e.target.value))} className="h-8 text-sm" />
+            </div>
           </div>
         </div>
         <DialogFooter className="gap-2">
@@ -189,6 +191,7 @@ export default function Planner() {
 
   const [showModuleSetup, setShowModuleSetup]       = useState(!data.module);
   const [showModuleSettings, setShowModuleSettings] = useState(false);
+  const [showHelp, setShowHelp]                     = useState(false);
   const [editNotes, setEditNotes]                   = useState('');
 
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
@@ -546,10 +549,22 @@ export default function Planner() {
           <div className="text-center space-y-3">
             <FiCalendar size={48} className="mx-auto text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No module configured yet.</p>
-            <Button size="sm" onClick={() => setShowModuleSetup(true)}>Create Module</Button>
+            <div className="flex items-center justify-center gap-2">
+              <Button size="sm" onClick={() => setShowModuleSetup(true)}>Create Module</Button>
+              <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                <FiUpload size={13} className="mr-1.5" /> Load from File
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowHelp(true)}>
+                <FiHelpCircle size={13} className="mr-1.5" /> Help
+              </Button>
+            </div>
           </div>
         </div>
+        <input ref={fileInputRef} type="file" accept=".json" className="hidden"
+          onChange={async e => { const f = e.target.files?.[0]; if (f) { await importFromFile(f); e.target.value = ''; } }}
+        />
         <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
+        <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
       </>
     );
   }
@@ -737,6 +752,9 @@ export default function Planner() {
             <button title="Module settings" onClick={e => { e.stopPropagation(); setShowModuleSettings(true); }} className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors flex-shrink-0">
               <FiSettings size={12} />
             </button>
+            <button title="Help" onClick={e => { e.stopPropagation(); setShowHelp(true); }} className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors flex-shrink-0">
+              <FiHelpCircle size={12} />
+            </button>
             <button onClick={e => { e.stopPropagation(); exportToFile(data); }} className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded transition-colors flex-shrink-0 flex items-center gap-1">
               <FiDownload size={11} /> Save to File
             </button>
@@ -817,7 +835,104 @@ export default function Planner() {
 
       <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
       <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} />
+      <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
+  );
+}
+
+/* ── Help Dialog ───────────────────────────────────────── */
+function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg rounded-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-base flex items-center gap-2">
+            <FiHelpCircle size={15} /> How to use the Timetable Planner
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-1 text-sm text-muted-foreground">
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">What is this?</h3>
+            <p className="text-xs">A visual timetable tool for students enrolled in a dual-location programme (VU Amsterdam + University of Twente). Plan your weekly schedule across both campuses for an entire module.</p>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Getting started</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li><strong>Create Module</strong> — set a name, the Monday of week 1, and how many weeks the module runs.</li>
+              <li><strong>Load from File</strong> — restore a previously saved timetable from a <code>.json</code> file.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Courses</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li>Click <strong>+ Add Course</strong> in the sidebar to create a course with a name and colour.</li>
+              <li><strong>Click</strong> a course to activate it (highlighted) — subsequent drags will create entries for that course.</li>
+              <li>Click a course again to deactivate it.</li>
+              <li>Double-click a course name to rename or recolour it.</li>
+              <li>Drag courses in the sidebar to reorder them.</li>
+              <li>Use the eye icon to hide/show a course on the calendar.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Creating &amp; editing time blocks</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li><strong>Activate a course</strong>, then <strong>drag</strong> on a day column to create a time block.</li>
+              <li><strong>Click</strong> an existing block to select it — edit week, day, start/end time in the sidebar.</li>
+              <li><strong>Drag</strong> a selected block to move it.</li>
+              <li>Use <strong>Delete entry</strong> in the sidebar to remove a block.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Travel &amp; "At Twente"</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li><strong>Travel</strong> is a built-in course for marking travel time. Activate it from the General section.</li>
+              <li>For a VU block, check <strong>At Twente</strong> in the sidebar to indicate you are physically at UT — shown with a coloured left stripe.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Linking blocks (sync)</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li>Select a block and click <strong>Link to VU/UT block</strong> to link it with a corresponding block at the other location.</li>
+              <li>Linked blocks display a <strong>↔</strong> indicator and are highlighted together when selected.</li>
+              <li>Click the × next to the link label to unlink.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Day notes</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li><strong>Click any day header</strong> (Mon, Tue…) in the calendar to open a note editor in the sidebar.</li>
+              <li>Days with notes show an <span className="inline-block h-2 w-2 rounded-full bg-amber-400 align-middle" /> amber dot and a tooltip preview on hover.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Locking a location</h3>
+            <p className="text-xs">Click the lock icon next to VU or UT to prevent accidental edits to that side of the calendar.</p>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Save, load &amp; PDF</h3>
+            <ul className="text-xs space-y-1 list-disc list-inside">
+              <li><strong>Save to File</strong> — exports your timetable as a <code>.json</code> file you can share or back up.</li>
+              <li><strong>Load from File</strong> — imports a previously saved <code>.json</code> file.</li>
+              <li><strong>PDF</strong> — opens a print-ready view in a new tab; use your browser's print function to save as PDF.</li>
+              <li>Your timetable is also automatically saved in your browser's local storage.</li>
+            </ul>
+          </section>
+
+        </div>
+        <DialogFooter>
+          <Button size="sm" onClick={onClose}>Got it</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
