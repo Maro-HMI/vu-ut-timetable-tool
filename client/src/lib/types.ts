@@ -26,6 +26,7 @@ export interface TimeBlock {
   startMinute: number; // minutes from midnight
   endMinute: number;
   notes?: string;
+  place?: string;     // free-text room/building label shown on the block
   syncGroupId?: string;
   atTwente?: boolean; // VU blocks only: student is attending at UT campus
 }

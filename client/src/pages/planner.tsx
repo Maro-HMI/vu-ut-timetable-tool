@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
   FiEye, FiEyeOff, FiLock, FiUnlock, FiPlus, FiTrash2, FiSettings,
@@ -121,7 +120,12 @@ type DragMove = {
   blockId: string; courseId: string; location: Location; weekNumber: number; dayOfWeek: number;
   startMin: number; endMin: number; duration: number; offsetMin: number;
 };
-type DragState = DragCreate | DragMove;
+type DragResize = {
+  type: 'resize-top' | 'resize-bottom';
+  blockId: string; location: Location; weekNumber: number; dayOfWeek: number;
+  startMin: number; endMin: number;
+};
+type DragState = DragCreate | DragMove | DragResize;
 
 /* ── Module Dialog ─────────────────────────────────────── */
 function ModuleDialog({
@@ -199,6 +203,7 @@ export default function Planner() {
   const [showModuleSettings, setShowModuleSettings] = useState(false);
   const [showHelp, setShowHelp]                     = useState(false);
   const [editNotes, setEditNotes]                   = useState('');
+  const [editPlace, setEditPlace]                   = useState('');
 
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const [editDayNote, setEditDayNote]       = useState('');
@@ -233,7 +238,10 @@ export default function Planner() {
   );
 
   useEffect(() => {
-    if (selectedBlock) setEditNotes(selectedBlock.notes ?? '');
+    if (selectedBlock) {
+      setEditNotes(selectedBlock.notes ?? '');
+      setEditPlace(selectedBlock.place ?? '');
+    }
   }, [selectedBlockId]);
 
   useEffect(() => {
@@ -294,6 +302,14 @@ export default function Planner() {
       setDragState(prev => {
         if (!prev) return null;
         if (prev.type === 'create') return { ...prev, currentMin: min };
+        if (prev.type === 'resize-top') {
+          const newStart = clamp(snap(min, SNAP_MIN), GRID_START, prev.endMin - SNAP_MIN);
+          return { ...prev, startMin: newStart };
+        }
+        if (prev.type === 'resize-bottom') {
+          const newEnd = clamp(snap(min, SNAP_MIN), prev.startMin + SNAP_MIN, GRID_END);
+          return { ...prev, endMin: newEnd };
+        }
         const newStart = clamp(snap(min - prev.offsetMin, SNAP_MIN), GRID_START, GRID_END - prev.duration);
         return { ...prev, startMin: newStart, endMin: newStart + prev.duration, dayOfWeek: targetDay };
       });
@@ -323,12 +339,22 @@ export default function Planner() {
             }));
           }
         }
-      } else {
+      } else if (ds.type === 'move') {
         updateRef.current(prev => ({
           ...prev,
           timeBlocks: prev.timeBlocks.map(b =>
             b.id === ds.blockId
               ? { ...b, dayOfWeek: ds.dayOfWeek, startMinute: ds.startMin, endMinute: ds.endMin }
+              : b
+          ),
+        }));
+      } else {
+        // resize-top or resize-bottom
+        updateRef.current(prev => ({
+          ...prev,
+          timeBlocks: prev.timeBlocks.map(b =>
+            b.id === ds.blockId
+              ? { ...b, startMinute: ds.startMin, endMinute: ds.endMin }
               : b
           ),
         }));
@@ -352,6 +378,7 @@ export default function Planner() {
       if (e.key === 'Escape') {
         setSelectedBlockId(null);
         setSelectedDayKey(null);
+        setActiveCourseId(null);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockIdRef.current) {
         e.preventDefault();
         deleteBlockRef.current(selectedBlockIdRef.current);
@@ -405,6 +432,16 @@ export default function Planner() {
       ),
     }));
   }, [update, selectedBlock, editNotes]);
+
+  const saveBlockPlace = useCallback(() => {
+    if (!selectedBlock) return;
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        b.id === selectedBlock.id ? { ...b, place: editPlace.trim() || undefined } : b
+      ),
+    }));
+  }, [update, selectedBlock, editPlace]);
 
   const updateBlockPosition = useCallback((
     weekNumber: number, dayOfWeek: number, startMinute: number, endMinute: number
@@ -585,9 +622,35 @@ export default function Planner() {
     [lockedLocations, syncMode, linkBlocks]
   );
 
+  const handleResizeMouseDown = useCallback(
+    (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => {
+      e.stopPropagation();
+      if (e.button !== 0) return;
+      if (lockedLocations.has(block.location)) return;
+      setSelectedBlockId(block.id);
+      setSelectedDayKey(null);
+      setDragState({
+        type: edge === 'top' ? 'resize-top' : 'resize-bottom',
+        blockId: block.id, location: block.location,
+        weekNumber: block.weekNumber, dayOfWeek: block.dayOfWeek,
+        startMin: block.startMinute, endMin: block.endMinute,
+      });
+    },
+    [lockedLocations]
+  );
+
   if (!data.module) {
     return (
       <>
+        {/* Mobile notice */}
+        <div className="sm:hidden fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background px-8 text-center gap-4">
+          <FiCalendar size={48} className="text-muted-foreground/40" />
+          <h1 className="text-lg font-semibold">Desktop only</h1>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            This timetable planner is designed for use on a laptop or desktop computer and requires a large screen to work properly.
+          </p>
+          <p className="text-xs text-muted-foreground">Please open it on a wider display.</p>
+        </div>
         <div className="flex items-center justify-center h-screen bg-background">
           <div className="text-center space-y-3">
             <FiCalendar size={48} className="mx-auto text-muted-foreground/40" />
@@ -614,6 +677,16 @@ export default function Planner() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+
+      {/* Mobile notice – shown only on small screens */}
+      <div className="sm:hidden fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background px-8 text-center gap-4">
+        <FiCalendar size={48} className="text-muted-foreground/40" />
+        <h1 className="text-lg font-semibold">Desktop only</h1>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          This timetable planner is designed for use on a laptop or desktop computer and requires a large screen to work properly.
+        </p>
+        <p className="text-xs text-muted-foreground">Please open it on a wider display.</p>
+      </div>
 
       {/* ── Sidebar ──────────────────────────────────────── */}
       <div
@@ -755,9 +828,12 @@ export default function Planner() {
                 syncPair={syncPairBlock}
                 syncMode={syncMode?.blockId === selectedBlock.id}
                 editNotes={editNotes}
+                editPlace={editPlace}
                 numWeeks={data.module.numWeeks}
                 onEditNotes={setEditNotes}
                 onSaveNotes={saveBlockNotes}
+                onEditPlace={setEditPlace}
+                onSavePlace={saveBlockPlace}
                 onUpdatePosition={updateBlockPosition}
                 onToggleAtTwente={toggleAtTwente}
                 onDelete={() => deleteBlock(selectedBlock.id)}
@@ -853,9 +929,13 @@ export default function Planner() {
                   colRefs={colRefs}
                   dayNotes={data.dayNotes ?? {}}
                   selectedDayKey={selectedDayKey}
+                  hasActiveCourse={activeCourseId !== null}
+                  activeSyncGroupId={selectedBlock?.syncGroupId ?? null}
+                  activeSyncLocation={selectedBlock?.location ?? null}
                   onSelectDay={handleSelectDay}
                   onColumnMouseDown={handleColumnMouseDown}
                   onBlockMouseDown={handleBlockMouseDown}
+                  onResizeMouseDown={handleResizeMouseDown}
                   onSelectBlock={id => { setSelectedBlockId(id); }}
                   getCourseColor={getCourseColor}
                   getCourseName={getCourseName}
@@ -1042,8 +1122,9 @@ function CourseItem({ id, name, color, isTravel, isActive, isHidden, hoursVU, ho
 interface BlockDetailsProps {
   block: TimeBlock; courseColor: string; courseName: string;
   syncPair: TimeBlock | null; syncMode: boolean;
-  editNotes: string; numWeeks: number;
+  editNotes: string; editPlace: string; numWeeks: number;
   onEditNotes: (v: string) => void; onSaveNotes: () => void;
+  onEditPlace: (v: string) => void; onSavePlace: () => void;
   onUpdatePosition: (week: number, day: number, start: number, end: number) => void;
   onToggleAtTwente: () => void;
   onDelete: () => void; onStartSync: () => void; onCancelSync: () => void; onUnlink: () => void;
@@ -1052,7 +1133,7 @@ interface BlockDetailsProps {
 
 function BlockDetails({
   block, courseColor, courseName, syncPair, syncMode,
-  editNotes, numWeeks, onEditNotes, onSaveNotes, onUpdatePosition,
+  editNotes, editPlace, numWeeks, onEditNotes, onSaveNotes, onEditPlace, onSavePlace, onUpdatePosition,
   onToggleAtTwente,
   onDelete, onStartSync, onCancelSync, onUnlink, getSyncPartnerName,
 }: BlockDetailsProps) {
@@ -1128,6 +1209,18 @@ function BlockDetails({
         </div>
       </div>
 
+      {/* Place / room label */}
+      <div className="space-y-0.5">
+        <Label className="text-[10px] text-muted-foreground">Location</Label>
+        <Input
+          value={editPlace}
+          onChange={e => onEditPlace(e.target.value)}
+          onBlur={onSavePlace}
+          placeholder="e.g. NU-3A22"
+          className="h-7 text-xs"
+        />
+      </div>
+
       {/* At Twente – VU blocks only */}
       {isVUBlock && (
         <label className="flex items-center gap-2 cursor-pointer select-none py-0.5">
@@ -1193,9 +1286,13 @@ interface WeekSectionProps {
   colRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   dayNotes: Record<string, string>;
   selectedDayKey: string | null;
+  hasActiveCourse: boolean;
+  activeSyncGroupId: string | null;
+  activeSyncLocation: Location | null;
   onSelectDay: (key: string) => void;
   onColumnMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
+  onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
   onSelectBlock: (id: string) => void;
   getCourseColor: (id: string) => string;
   getCourseName: (id: string) => string;
@@ -1204,11 +1301,12 @@ interface WeekSectionProps {
 function WeekSection({
   week, getBlocks, selectedBlockId, syncMode, syncPairId,
   dragState, lockedLocations, colRefs,
-  dayNotes, onSelectDay,
-  onColumnMouseDown, onBlockMouseDown, onSelectBlock,
+  dayNotes, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
+  onColumnMouseDown, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
 }: WeekSectionProps) {
   const cw = getISOWeek(week.startDate);
+  const [dayHover, setDayHover] = useState<{ note: string; x: number; y: number } | null>(null);
 
   return (
     <div className="border-b-2">
@@ -1222,23 +1320,17 @@ function WeekSection({
             const dKey = colKey('VU', week.weekNumber, di);
             const note = dayNotes[dKey];
             return (
-              <Tooltip key={di} delayDuration={150}>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
-                    onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
-                  >
-                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                    <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                    <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
-                  </div>
-                </TooltipTrigger>
-                {note && (
-                  <TooltipContent side="bottom" className="max-w-[180px] text-xs">
-                    <p className="whitespace-pre-wrap">{note}</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
+              <div
+                key={di}
+                className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
+                onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
+                onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
+                onMouseLeave={note ? () => setDayHover(null) : undefined}
+              >
+                {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
+                <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
+                <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+              </div>
             );
           })}
         </div>
@@ -1260,23 +1352,17 @@ function WeekSection({
             const dKey = colKey('UT', week.weekNumber, di);
             const note = dayNotes[dKey];
             return (
-              <Tooltip key={di} delayDuration={150}>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
-                    onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
-                  >
-                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                    <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                    <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
-                  </div>
-                </TooltipTrigger>
-                {note && (
-                  <TooltipContent side="bottom" className="max-w-[180px] text-xs">
-                    <p className="whitespace-pre-wrap">{note}</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
+              <div
+                key={di}
+                className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
+                onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
+                onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
+                onMouseLeave={note ? () => setDayHover(null) : undefined}
+              >
+                {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
+                <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
+                <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+              </div>
             );
           })}
         </div>
@@ -1303,8 +1389,9 @@ function WeekSection({
               blocks={getBlocks('VU', week.weekNumber, di)}
               selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
               dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber ? dragState : null}
-              locked={lockedLocations.has('VU')} colRefs={colRefs}
-              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onSelectBlock={onSelectBlock}
+              locked={lockedLocations.has('VU')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
+              activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
+              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
             />
           ))}
@@ -1323,13 +1410,35 @@ function WeekSection({
               blocks={getBlocks('UT', week.weekNumber, di)}
               selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
               dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber ? dragState : null}
-              locked={lockedLocations.has('UT')} colRefs={colRefs}
-              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onSelectBlock={onSelectBlock}
+              locked={lockedLocations.has('UT')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
+              activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
+              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
             />
           ))}
         </div>
       </div>
+
+      {/* Day-note cursor-following popup */}
+      {dayHover && (() => {
+        const PAD = 12;
+        const POP_W = 200;
+        const vpW = window.innerWidth;
+        const vpH = window.innerHeight;
+        const flipX = dayHover.x + PAD + POP_W > vpW;
+        const flipY = dayHover.y + PAD + 60 > vpH;
+        const x = flipX ? dayHover.x - PAD : dayHover.x + PAD;
+        const y = flipY ? dayHover.y - PAD : dayHover.y + PAD;
+        const transform = `${flipX ? 'translateX(-100%)' : ''} ${flipY ? 'translateY(-100%)' : ''}`.trim() || undefined;
+        return (
+          <div
+            className="fixed z-[9998] bg-popover text-popover-foreground border rounded-md shadow-md px-2.5 py-1.5 text-xs pointer-events-none max-w-[200px]"
+            style={{ left: x, top: y, transform }}
+          >
+            <p className="whitespace-pre-wrap">{dayHover.note}</p>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1389,9 +1498,13 @@ interface DayColumnProps {
   syncPairId: string | null;
   dragState: DragState | null;
   locked: boolean;
+  hasActiveCourse: boolean;
+  activeSyncGroupId: string | null;
+  activeSyncLocation: Location | null;
   colRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   onMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
+  onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
   onSelectBlock: (id: string) => void;
   getCourseColor: (id: string) => string;
   getCourseName: (id: string) => string;
@@ -1400,11 +1513,15 @@ interface DayColumnProps {
 function DayColumn({
   location, weekNumber, dayOfWeek, blocks,
   selectedBlockId, syncMode, syncPairId,
-  dragState, locked, colRefs,
-  onMouseDown, onBlockMouseDown, onSelectBlock,
+  dragState, locked, hasActiveCourse, activeSyncGroupId, activeSyncLocation, colRefs,
+  onMouseDown, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
 }: DayColumnProps) {
   const key = colKey(location, weekNumber, dayOfWeek);
+
+  /* Cursor-tracking hover popup */
+  const [hover, setHover] = useState<{ block: TimeBlock; x: number; y: number } | null>(null);
+  const hoverRef = useRef<HTMLDivElement | null>(null);
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
@@ -1433,7 +1550,7 @@ function DayColumn({
   return (
     <div
       ref={refCallback}
-      className={cn('flex-1 relative select-none', dayOfWeek > 0 && 'border-l', !locked && 'cursor-crosshair')}
+      className={cn('flex-1 relative select-none', dayOfWeek > 0 && 'border-l', !locked && hasActiveCourse && 'cursor-crosshair')}
       style={{ height: GRID_HEIGHT }}
       onClick={e => e.stopPropagation()}
       onMouseDown={e => {
@@ -1456,12 +1573,16 @@ function DayColumn({
       })()}
 
       {blocks.map(block => {
-        const isBeingMoved = dragState?.type === 'move' && dragState.blockId === block.id;
-        const isDraggedAway = isBeingMoved && dragState.dayOfWeek !== dayOfWeek;
+        const isBeingMoved   = dragState?.type === 'move' && dragState.blockId === block.id;
+        const isBeingResized = (dragState?.type === 'resize-top' || dragState?.type === 'resize-bottom') && dragState.blockId === block.id;
+        const isDraggedAway  = isBeingMoved && dragState.dayOfWeek !== dayOfWeek;
         const isSelected   = block.id === selectedBlockId;
         const isSyncPair   = block.id === syncPairId;
         const isSyncTarget = syncMode !== null && block.courseId === syncMode.courseId &&
           block.location !== syncMode.fromLocation && !block.syncGroupId;
+        const isDimmed     = activeSyncGroupId !== null && activeSyncLocation !== null &&
+          block.location !== activeSyncLocation &&
+          block.syncGroupId !== activeSyncGroupId;
 
         const color    = getCourseColor(block.courseId);
         const name     = getCourseName(block.courseId);
@@ -1472,23 +1593,24 @@ function DayColumn({
         if (isDraggedAway) return null;
 
         const { leftPct, widthPct } = layout.get(block.id) ?? { leftPct: 0, widthPct: 100 };
-        const top    = isBeingMoved && dragState?.type === 'move'
-          ? (dragState.startMin - GRID_START) * PX_PER_MIN
-          : (block.startMinute - GRID_START) * PX_PER_MIN;
-        const height = (block.endMinute - block.startMinute) * PX_PER_MIN;
+        const liveStart = isBeingResized && dragState ? dragState.startMin : isBeingMoved && dragState?.type === 'move' ? dragState.startMin : block.startMinute;
+        const liveEnd   = isBeingResized && dragState ? dragState.endMin   : isBeingMoved && dragState?.type === 'move' ? dragState.endMin   : block.endMinute;
+        const top    = (liveStart - GRID_START) * PX_PER_MIN;
+        const height = (liveEnd - liveStart) * PX_PER_MIN;
 
         const blockEl = (
           <div
             key={block.id}
             data-block="true"
             className={cn(
-              'absolute rounded-sm overflow-hidden z-10 transition-shadow',
+              'absolute rounded-sm overflow-hidden z-10 transition-[shadow,opacity]',
               isBeingMoved && 'opacity-80 shadow-lg z-30',
               isSelected && 'ring-2 ring-primary ring-offset-0 z-20',
               isSyncPair && 'ring-2 ring-orange-400 z-20',
               isSyncTarget && 'ring-2 ring-green-500 animate-pulse z-20',
-              isTravel && 'pointer-events-none opacity-60',
-              !isTravel && !locked && 'cursor-pointer',
+              isTravel && 'opacity-60',
+              isDimmed && 'opacity-20',
+              !locked && 'cursor-pointer',
             )}
             style={{
               top,
@@ -1503,10 +1625,10 @@ function DayColumn({
                 ? `repeating-linear-gradient(45deg, ${TRAVEL_COLOR}22 0px, ${TRAVEL_COLOR}22 4px, ${TRAVEL_COLOR}55 4px, ${TRAVEL_COLOR}55 8px)`
                 : undefined,
             }}
-            onMouseDown={e => { if (!isTravel) onBlockMouseDown(e, block); }}
+            onMouseDown={e => onBlockMouseDown(e, block)}
             onClick={e => {
               e.stopPropagation();
-              if (!isTravel && !locked) onSelectBlock(block.id);
+              if (!locked) onSelectBlock(block.id);
             }}
           >
             {/* At Twente inset stripe (10% width) */}
@@ -1519,9 +1641,14 @@ function DayColumn({
             <div className="px-0.5 pt-0.5 text-[9px] leading-tight font-semibold truncate" style={{ color, paddingLeft: showAtTwente ? 'calc(10% + 3px)' : undefined }}>
               {isTravel ? '✈' : ''} {name}
             </div>
-            {height >= 24 && (
+            {height >= 24 && block.place && (
+              <div className="px-0.5 text-[8px] text-muted-foreground truncate leading-tight" style={{ paddingLeft: showAtTwente ? 'calc(10% + 3px)' : undefined }}>
+                {block.place}
+              </div>
+            )}
+            {height >= (block.place ? 36 : 24) && (
               <div className="px-0.5 text-[8px] text-muted-foreground truncate leading-tight" style={{ fontVariantNumeric: 'tabular-nums', paddingLeft: showAtTwente ? 'calc(10% + 3px)' : undefined }}>
-                {formatTime(block.startMinute)}
+                {formatTime(liveStart)}
               </div>
             )}
             {isSynced && (
@@ -1535,26 +1662,66 @@ function DayColumn({
                 style={{ backgroundColor: color, opacity: 0.8 }}
               />
             )}
+            {/* Resize handles — only on selected, unlocked blocks */}
+            {isSelected && !locked && (
+              <>
+                <div
+                  className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-30"
+                  onMouseDown={e => onResizeMouseDown(e, block, 'top')}
+                />
+                <div
+                  className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize z-30"
+                  onMouseDown={e => onResizeMouseDown(e, block, 'bottom')}
+                />
+              </>
+            )}
           </div>
         );
 
-        if (isTravel) return blockEl;
+        const hasHoverContent = !!(block.atTwente && block.location === 'VU') || !!block.notes || !!block.place;
 
         return (
-          <Tooltip key={block.id} delayDuration={150}>
-            <TooltipTrigger asChild>
-              {blockEl}
-            </TooltipTrigger>
-            <TooltipContent side="right" className="max-w-[180px] text-xs">
-              <p className="font-semibold">{name}</p>
-              {block.atTwente && block.location === 'VU' && (
-                <p className="text-[10px] text-muted-foreground">At Twente</p>
-              )}
-              {block.notes && <p className="text-muted-foreground mt-0.5 whitespace-pre-wrap">{block.notes}</p>}
-            </TooltipContent>
-          </Tooltip>
+          <div key={block.id}
+            onMouseMove={e => { if (!dragState) setHover({ block, x: e.clientX, y: e.clientY }); }}
+            onMouseLeave={() => setHover(null)}
+          >
+            {blockEl}
+          </div>
         );
       })}
+
+      {/* Cursor-tracking hover popup – position: fixed escapes overflow clips */}
+      {hover && (() => {
+        const b = hover.block;
+        const bName = getCourseName(b.courseId);
+        const PAD = 12;
+        const POP_W = 180;
+        const vpW = window.innerWidth;
+        const vpH = window.innerHeight;
+        const flipX = hover.x + PAD + POP_W > vpW;
+        const flipY = hover.y + PAD + 60 > vpH;
+        const x = flipX ? hover.x - PAD : hover.x + PAD;
+        const y = flipY ? hover.y - PAD : hover.y + PAD;
+        const transform = `${flipX ? 'translateX(-100%)' : ''} ${flipY ? 'translateY(-100%)' : ''}`.trim() || undefined;
+        return (
+          <div
+            ref={hoverRef}
+            className="fixed z-[9998] bg-popover text-popover-foreground border rounded-md shadow-md px-2.5 py-1.5 text-xs pointer-events-none"
+            style={{ left: x, top: y, maxWidth: POP_W, transform }}
+          >
+            <p className="font-semibold">{bName}</p>
+            {b.syncGroupId && (
+              <div className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded bg-slate-800 text-white text-[10px] font-medium leading-none">
+                <FiLink2 size={11} />
+                <span>Linked</span>
+              </div>
+            )}
+            {b.place && <p className="text-[10px] text-muted-foreground mt-0.5">{b.place}</p>}
+            {b.atTwente && b.location === 'VU' && <p className="text-[10px] text-muted-foreground">At Twente</p>}
+            {b.notes && <p className="text-muted-foreground mt-0.5 whitespace-pre-wrap">{b.notes}</p>}
+          </div>
+        );
+      })()}
     </div>
   );
 }
