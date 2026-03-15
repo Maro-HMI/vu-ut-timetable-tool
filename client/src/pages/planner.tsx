@@ -902,7 +902,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Getting started</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Create Module</strong> — set a name, the Monday of week 1, and how many weeks the module runs.</li>
               <li><strong>Load from File</strong> — restore a previously saved timetable from a <code>.json</code> file.</li>
             </ul>
@@ -910,7 +910,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Courses</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li>Click <strong>+ Add Course</strong> in the sidebar to create a course with a name and colour.</li>
               <li><strong>Click</strong> a course to activate it (highlighted) — subsequent drags will create entries for that course.</li>
               <li>Click a course again to deactivate it.</li>
@@ -922,7 +922,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Creating &amp; editing time blocks</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Activate a course</strong>, then <strong>drag</strong> on a day column to create a time block.</li>
               <li><strong>Click</strong> an existing block to select it — edit week, day, start/end time in the sidebar.</li>
               <li><strong>Drag</strong> a selected block to move it.</li>
@@ -932,7 +932,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Travel &amp; "At Twente"</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Travel</strong> is a built-in course for marking travel time. Activate it from the General section.</li>
               <li>For a VU block, check <strong>At Twente</strong> in the sidebar to indicate you are physically at UT — shown with a coloured left stripe.</li>
             </ul>
@@ -940,7 +940,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Linking blocks (sync)</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li>Select a block and click <strong>Link to VU/UT block</strong> to link it with a corresponding block at the other location.</li>
               <li>Linked blocks display a <strong>↔</strong> indicator and are highlighted together when selected.</li>
               <li>Click the × next to the link label to unlink.</li>
@@ -949,9 +949,9 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Day notes</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Click any day header</strong> (Mon, Tue…) in the calendar to open a note editor in the sidebar.</li>
-              <li>Days with notes show an <span className="inline-block h-2 w-2 rounded-full bg-amber-400 align-middle" /> amber dot and a tooltip preview on hover.</li>
+              <li>Days with notes show a <span className="inline-block h-2 w-2 rounded-full bg-blue-600 align-middle" /> blue dot and a tooltip preview on hover.</li>
             </ul>
           </section>
 
@@ -962,7 +962,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
           <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Save, load &amp; PDF</h3>
-            <ul className="text-xs space-y-1 list-disc list-inside">
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Save to File</strong> — exports your timetable as a <code>.json</code> file you can share or back up.</li>
               <li><strong>Load from File</strong> — imports a previously saved <code>.json</code> file.</li>
               <li><strong>PDF</strong> — opens a print-ready view in a new tab; use your browser's print function to save as PDF.</li>
