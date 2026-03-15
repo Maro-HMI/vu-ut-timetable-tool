@@ -118,7 +118,7 @@ type DragCreate = {
 };
 type DragMove = {
   type: 'move';
-  blockId: string; location: Location; weekNumber: number; dayOfWeek: number;
+  blockId: string; courseId: string; location: Location; weekNumber: number; dayOfWeek: number;
   startMin: number; endMin: number; duration: number; offsetMin: number;
 };
 type DragState = DragCreate | DragMove;
@@ -204,19 +204,22 @@ export default function Planner() {
   const [editDayNote, setEditDayNote]       = useState('');
 
   /* Refs */
-  const colRefs         = useRef<Map<string, HTMLDivElement>>(new Map());
-  const dragStateRef    = useRef<DragState | null>(null);
-  const activeCourseRef = useRef<string | null>(null);
-  const dataRef         = useRef<AppData>(data);
-  const updateRef       = useRef(update);
-  const selectedIdRef   = useRef<string | null>(null);
-  const fileInputRef    = useRef<HTMLInputElement>(null);
+  const colRefs              = useRef<Map<string, HTMLDivElement>>(new Map());
+  const dragStateRef         = useRef<DragState | null>(null);
+  const activeCourseRef      = useRef<string | null>(null);
+  const dataRef              = useRef<AppData>(data);
+  const updateRef            = useRef(update);
+  const selectedIdRef        = useRef<string | null>(null);
+  const selectedBlockIdRef   = useRef<string | null>(null);
+  const deleteBlockRef       = useRef<(id: string) => void>(() => {});
+  const fileInputRef         = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { dragStateRef.current = dragState; },         [dragState]);
-  useEffect(() => { activeCourseRef.current = activeCourseId; }, [activeCourseId]);
-  useEffect(() => { dataRef.current = data; },                   [data]);
-  useEffect(() => { updateRef.current = update; },               [update]);
-  useEffect(() => { selectedIdRef.current = selectedBlockId; },  [selectedBlockId]);
+  useEffect(() => { dragStateRef.current = dragState; },           [dragState]);
+  useEffect(() => { activeCourseRef.current = activeCourseId; },   [activeCourseId]);
+  useEffect(() => { dataRef.current = data; },                     [data]);
+  useEffect(() => { updateRef.current = update; },                 [update]);
+  useEffect(() => { selectedIdRef.current = selectedBlockId; },    [selectedBlockId]);
+  useEffect(() => { selectedBlockIdRef.current = selectedBlockId; }, [selectedBlockId]);
 
   /* Derived */
   const weeks = useMemo(() => {
@@ -341,6 +344,24 @@ export default function Planner() {
     };
   }, []);
 
+  /* Global keyboard shortcuts */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'Escape') {
+        setSelectedBlockId(null);
+        setSelectedDayKey(null);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockIdRef.current) {
+        e.preventDefault();
+        deleteBlockRef.current(selectedBlockIdRef.current);
+        setSelectedBlockId(null);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   /* Actions */
   const deleteBlock = useCallback((id: string) => {
     update(prev => {
@@ -355,6 +376,7 @@ export default function Planner() {
     });
     if (selectedBlockId === id) setSelectedBlockId(null);
   }, [update, selectedBlockId]);
+  useEffect(() => { deleteBlockRef.current = deleteBlock; }, [deleteBlock]);
 
   const saveDayNote = useCallback(() => {
     if (!selectedDayKey) return;
@@ -553,7 +575,7 @@ export default function Planner() {
       if (!colEl) return;
       const clickMin = minFromClientY(colEl, e.clientY);
       setDragState({
-        type: 'move', blockId: block.id,
+        type: 'move', blockId: block.id, courseId: block.courseId,
         location: block.location, weekNumber: block.weekNumber, dayOfWeek: block.dayOfWeek,
         startMin: block.startMinute, endMin: block.endMinute,
         duration: block.endMinute - block.startMinute,
@@ -1206,7 +1228,7 @@ function WeekSection({
                     className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
                     onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
                   >
-                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />}
+                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
                     <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
                     <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
                   </div>
@@ -1244,7 +1266,7 @@ function WeekSection({
                     className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
                     onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
                   >
-                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />}
+                    {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
                     <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
                     <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
                   </div>
@@ -1280,7 +1302,7 @@ function WeekSection({
             <DayColumn key={di} location="VU" weekNumber={week.weekNumber} dayOfWeek={di}
               blocks={getBlocks('VU', week.weekNumber, di)}
               selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
-              dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber && dragState?.dayOfWeek === di ? dragState : null}
+              dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('VU')} colRefs={colRefs}
               onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
@@ -1300,7 +1322,7 @@ function WeekSection({
             <DayColumn key={di} location="UT" weekNumber={week.weekNumber} dayOfWeek={di}
               blocks={getBlocks('UT', week.weekNumber, di)}
               selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
-              dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber && dragState?.dayOfWeek === di ? dragState : null}
+              dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('UT')} colRefs={colRefs}
               onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
@@ -1420,13 +1442,22 @@ function DayColumn({
         }
       }}
     >
-      {dragState?.type === 'create' && dragPreview && (
+      {dragState?.type === 'create' && dragState.dayOfWeek === dayOfWeek && dragPreview && (
         <div className="absolute left-0.5 right-0.5 bg-primary/20 border border-primary/50 rounded-sm pointer-events-none z-20"
           style={{ top: dragPreview.top, height: dragPreview.height }} />
       )}
 
+      {dragState?.type === 'move' && dragState.dayOfWeek === dayOfWeek && dragPreview && (() => {
+        const moveColor = getCourseColor(dragState.courseId);
+        return (
+          <div className="absolute left-0.5 right-0.5 rounded-sm pointer-events-none z-30 opacity-80 shadow-lg"
+            style={{ top: dragPreview.top, height: dragPreview.height, backgroundColor: `${moveColor}50`, border: `2px solid ${moveColor}` }} />
+        );
+      })()}
+
       {blocks.map(block => {
         const isBeingMoved = dragState?.type === 'move' && dragState.blockId === block.id;
+        const isDraggedAway = isBeingMoved && dragState.dayOfWeek !== dayOfWeek;
         const isSelected   = block.id === selectedBlockId;
         const isSyncPair   = block.id === syncPairId;
         const isSyncTarget = syncMode !== null && block.courseId === syncMode.courseId &&
@@ -1437,6 +1468,8 @@ function DayColumn({
         const isTravel = block.courseId === TRAVEL_ID;
         const isSynced = !!block.syncGroupId;
         const showAtTwente = !!block.atTwente && block.location === 'VU' && !isTravel;
+
+        if (isDraggedAway) return null;
 
         const { leftPct, widthPct } = layout.get(block.id) ?? { leftPct: 0, widthPct: 100 };
         const top    = isBeingMoved && dragState?.type === 'move'
