@@ -1691,7 +1691,7 @@ function DayColumn({
       })}
 
       {/* Cursor-tracking hover popup – position: fixed escapes overflow clips */}
-      {hover && (() => {
+      {hover && blocks.some(b => b.id === hover.block.id) && (() => {
         const b = hover.block;
         const bName = getCourseName(b.courseId);
         const PAD = 12;
