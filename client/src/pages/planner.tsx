@@ -23,9 +23,15 @@ const PX_PER_MIN  = HOUR_HEIGHT / 60;
 const GRID_HEIGHT = (GRID_END - GRID_START) * PX_PER_MIN; // 300px
 const SNAP_MIN    = 15;
 const LOCATIONS: Location[] = ['VU', 'UT'];
-const TIME_AXIS_W = 38; // px
+const TIME_AXIS_W = 28; // px
 const GAP_W       = 44; // px – gap between VU and UT sections
 const SIDEBAR_W   = 220; // px
+
+const COURSE_COLORS = [
+  '#9B59B6', '#E67E22', '#3498DB', '#27AE60', '#F06292',
+  '#E74C3C', '#1ABC9C', '#F39C12', '#2980B9', '#8E44AD',
+  '#16A085', '#D35400', '#2ECC71', '#E91E63', '#00BCD4',
+];
 
 /* ── Helpers ───────────────────────────────────────────── */
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -185,7 +191,7 @@ export default function Planner() {
   const [editCourseColor, setEditCourseColor] = useState('#3b82f6');
   const [addingCourse, setAddingCourse]       = useState(false);
   const [newCourseName, setNewCourseName]     = useState('');
-  const [newCourseColor, setNewCourseColor]   = useState('#3b82f6');
+  const [newCourseColor, setNewCourseColor]   = useState(COURSE_COLORS[0]);
 
   const [dragCourseIdx, setDragCourseIdx] = useState<number | null>(null);
 
@@ -263,15 +269,30 @@ export default function Planner() {
     const onMove = (e: MouseEvent) => {
       const ds = dragStateRef.current;
       if (!ds) return;
-      const key = colKey(ds.location, ds.weekNumber, ds.dayOfWeek);
-      const colEl = colRefs.current.get(key);
+
+      // For move drags, detect which day column the mouse is over (same location/week)
+      let targetDay = ds.dayOfWeek;
+      if (ds.type === 'move') {
+        for (let d = 0; d < 5; d++) {
+          const el = colRefs.current.get(colKey(ds.location, ds.weekNumber, d));
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            if (e.clientX >= rect.left && e.clientX <= rect.right) {
+              targetDay = d;
+              break;
+            }
+          }
+        }
+      }
+
+      const colEl = colRefs.current.get(colKey(ds.location, ds.weekNumber, targetDay));
       if (!colEl) return;
       const min = minFromClientY(colEl, e.clientY);
       setDragState(prev => {
         if (!prev) return null;
         if (prev.type === 'create') return { ...prev, currentMin: min };
         const newStart = clamp(snap(min - prev.offsetMin, SNAP_MIN), GRID_START, GRID_END - prev.duration);
-        return { ...prev, startMin: newStart, endMin: newStart + prev.duration };
+        return { ...prev, startMin: newStart, endMin: newStart + prev.duration, dayOfWeek: targetDay };
       });
     };
 
@@ -304,7 +325,7 @@ export default function Planner() {
           ...prev,
           timeBlocks: prev.timeBlocks.map(b =>
             b.id === ds.blockId
-              ? { ...b, startMinute: ds.startMin, endMinute: ds.endMin }
+              ? { ...b, dayOfWeek: ds.dayOfWeek, startMinute: ds.startMin, endMinute: ds.endMin }
               : b
           ),
         }));
@@ -442,7 +463,8 @@ export default function Planner() {
       ...prev,
       courses: [...prev.courses, { id: uid(), name: newCourseName.trim(), color: newCourseColor }],
     }));
-    setNewCourseName(''); setNewCourseColor('#3b82f6'); setAddingCourse(false);
+    setNewCourseName('');
+    setAddingCourse(false);
   }, [update, newCourseName, newCourseColor]);
 
   const handleSaveCourseEdit = useCallback(() => {
@@ -498,13 +520,12 @@ export default function Planner() {
     (e: React.MouseEvent, location: Location, weekNumber: number, dayOfWeek: number) => {
       if (e.button !== 0) return;
       if (lockedLocations.has(location)) return;
-      const key = colKey(location, weekNumber, dayOfWeek);
       if (!activeCourseRef.current) {
-        setSelectedDayKey(key);
+        setSelectedDayKey(null);
         setSelectedBlockId(null);
         return;
       }
-      const colEl = colRefs.current.get(key);
+      const colEl = colRefs.current.get(colKey(location, weekNumber, dayOfWeek));
       if (!colEl) return;
       const startMin = minFromClientY(colEl, e.clientY);
       setDragState({ type: 'create', location, weekNumber, dayOfWeek, startMin, currentMin: startMin });
@@ -679,7 +700,7 @@ export default function Planner() {
                 </div>
               </div>
             ) : (
-              <button onClick={() => setAddingCourse(true)}
+              <button onClick={() => { setAddingCourse(true); setNewCourseColor(COURSE_COLORS[data.courses.length % COURSE_COLORS.length]); }}
                 className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors mt-0.5"
               >
                 <FiPlus size={12} /> Add Course
@@ -773,7 +794,7 @@ export default function Planner() {
           <div className="flex-shrink-0 border-b bg-card z-30 flex h-8">
             <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
             <div className="flex-1 flex items-center justify-center gap-2">
-              <span className="text-xs font-bold tracking-wider">VU</span>
+              <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
               <button
                 title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
                 onClick={e => { e.stopPropagation(); toggleLock('VU'); }}
@@ -784,7 +805,7 @@ export default function Planner() {
             </div>
             <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
             <div className="flex-1 flex items-center justify-center gap-2">
-              <span className="text-xs font-bold tracking-wider">UT</span>
+              <span className="text-xs font-bold tracking-wider">UTwente</span>
               <button
                 title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
                 onClick={e => { e.stopPropagation(); toggleLock('UT'); }}
@@ -1168,7 +1189,7 @@ function WeekSection({
   const cw = getISOWeek(week.startDate);
 
   return (
-    <div className="border-b">
+    <div className="border-b-2">
       {/* Sticky week header */}
       <div className="sticky top-0 z-20 flex bg-white">
         {/* Time axis slot – same bg as grid, no bottom border so it reads as one column */}
@@ -1202,7 +1223,7 @@ function WeekSection({
         {/* Gap W/CW */}
         <div
           style={{ width: GAP_W, minWidth: GAP_W }}
-          className="flex-shrink-0 flex flex-col items-center justify-center border-r border-l border-b-2 bg-muted/20 py-0.5"
+          className="flex-shrink-0 flex flex-col items-center justify-center border-r border-b-2 bg-muted/20 py-0.5"
         >
           <span className="text-[10px] font-bold leading-none text-foreground" style={{ fontVariantNumeric: 'tabular-nums' }}>
             W{week.weekNumber}
@@ -1270,7 +1291,7 @@ function WeekSection({
         {/* Gap column – plain white */}
         <div
           style={{ width: GAP_W, minWidth: GAP_W, height: GRID_HEIGHT }}
-          className="flex-shrink-0 border-r border-l bg-white"
+          className="flex-shrink-0 border-r bg-white"
         />
 
         <div className="flex-1 flex relative">
