@@ -27,10 +27,12 @@ export interface TimeBlock {
   endMinute: number;
   notes?: string;
   syncGroupId?: string;
+  atTwente?: boolean; // VU blocks only: student is attending at UT campus
 }
 
 export interface AppData {
   module: Module | null;
   courses: Course[];
   timeBlocks: TimeBlock[];
+  dayNotes?: Record<string, string>; // key: "${location}-w${weekNumber}-d${dayOfWeek}"
 }

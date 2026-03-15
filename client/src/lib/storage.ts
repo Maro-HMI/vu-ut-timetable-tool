@@ -7,6 +7,7 @@ const defaultData: AppData = {
   module: null,
   courses: [],
   timeBlocks: [],
+  dayNotes: {},
 };
 
 function load(): AppData {
@@ -18,6 +19,7 @@ function load(): AppData {
       module: parsed.module ?? null,
       courses: parsed.courses ?? [],
       timeBlocks: parsed.timeBlocks ?? [],
+      dayNotes: parsed.dayNotes ?? {},
     };
   } catch {
     return defaultData;
