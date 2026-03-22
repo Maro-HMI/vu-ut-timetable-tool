@@ -129,18 +129,21 @@ type DragState = DragCreate | DragMove | DragResize;
 
 /* ── Module Dialog ─────────────────────────────────────── */
 function ModuleDialog({
-  open, initial, onSave, onCancel,
+  open, initial, onSave, onCancel, onClearData,
 }: {
   open: boolean; initial?: Module | null;
   onSave: (m: Omit<Module, 'id'>) => void; onCancel: () => void;
+  onClearData?: () => void;
 }) {
   const [name, setName]           = useState(initial?.name ?? '');
   const [startDate, setStartDate] = useState(initial?.startDate ?? nextMonday());
   const [numWeeks, setNumWeeks]   = useState(initial?.numWeeks ?? 10);
+  const [confirmClear, setConfirmClear] = useState(false);
   useEffect(() => {
     if (open) {
       setName(initial?.name ?? ''); setStartDate(initial?.startDate ?? nextMonday());
       setNumWeeks(initial?.numWeeks ?? 10);
+      setConfirmClear(false);
     }
   }, [open, initial]);
   return (
@@ -165,6 +168,27 @@ function ModuleDialog({
               <Input type="number" min={1} max={52} value={numWeeks} onChange={e => setNumWeeks(Number(e.target.value))} className="h-8 text-sm" />
             </div>
           </div>
+          {onClearData && (
+            <div className="border-t pt-3">
+              {confirmClear ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-destructive font-medium">This will delete all courses, time blocks, and notes. This cannot be undone.</p>
+                  <div className="flex gap-2">
+                    <Button variant="destructive" size="sm" className="flex-1 h-7 text-xs" onClick={onClearData}>
+                      Yes, clear everything
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setConfirmClear(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" className="w-full h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/5" onClick={() => setConfirmClear(true)}>
+                  <FiTrash2 size={11} className="mr-1.5" /> Clear all data
+                </Button>
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter className="gap-2">
           {initial && <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>}
@@ -179,7 +203,7 @@ function ModuleDialog({
 
 /* ── Main Planner ──────────────────────────────────────── */
 export default function Planner() {
-  const { data, update, exportToFile, importFromFile } = useAppData();
+  const { data, update, exportToFile, importFromFile, reset } = useAppData();
 
   const [activeCourseId, setActiveCourseId]   = useState<string | null>(null);
   const [hiddenCourseIds, setHiddenCourseIds] = useState<Set<string>>(new Set());
@@ -957,7 +981,7 @@ export default function Planner() {
       )}
 
       <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
-      <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} />
+      <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} onClearData={data.courses.length > 0 || data.timeBlocks.length > 0 || Object.keys(data.dayNotes).length > 0 ? () => { reset(); setShowModuleSettings(false); } : undefined} />
       <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );

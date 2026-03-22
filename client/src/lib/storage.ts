@@ -74,5 +74,10 @@ export function useAppData() {
     });
   }, []);
 
-  return { data, update, exportToFile, importFromFile };
+  const reset = useCallback(() => {
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    setData(defaultData);
+  }, []);
+
+  return { data, update, exportToFile, importFromFile, reset };
 }
