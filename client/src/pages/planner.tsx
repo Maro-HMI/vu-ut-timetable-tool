@@ -242,13 +242,17 @@ export default function Planner() {
   const selectedBlockIdRef   = useRef<string | null>(null);
   const deleteBlockRef       = useRef<(id: string) => void>(() => {});
   const fileInputRef         = useRef<HTMLInputElement>(null);
+  const clipboardRef         = useRef<TimeBlock | null>(null);
+  const hoveredColumnRef     = useRef<{ location: Location; weekNumber: number; dayOfWeek: number } | null>(null);
+  const lockedLocationsRef   = useRef<Set<Location>>(lockedLocations);
 
-  useEffect(() => { dragStateRef.current = dragState; },           [dragState]);
-  useEffect(() => { activeCourseRef.current = activeCourseId; },   [activeCourseId]);
-  useEffect(() => { dataRef.current = data; },                     [data]);
-  useEffect(() => { updateRef.current = update; },                 [update]);
-  useEffect(() => { selectedIdRef.current = selectedBlockId; },    [selectedBlockId]);
+  useEffect(() => { dragStateRef.current = dragState; },             [dragState]);
+  useEffect(() => { activeCourseRef.current = activeCourseId; },     [activeCourseId]);
+  useEffect(() => { dataRef.current = data; },                       [data]);
+  useEffect(() => { updateRef.current = update; },                   [update]);
+  useEffect(() => { selectedIdRef.current = selectedBlockId; },      [selectedBlockId]);
   useEffect(() => { selectedBlockIdRef.current = selectedBlockId; }, [selectedBlockId]);
+  useEffect(() => { lockedLocationsRef.current = lockedLocations; }, [lockedLocations]);
 
   /* Derived */
   const weeks = useMemo(() => {
@@ -399,6 +403,8 @@ export default function Planner() {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const mod = e.metaKey || e.ctrlKey;
+
       if (e.key === 'Escape') {
         setSelectedBlockId(null);
         setSelectedDayKey(null);
@@ -407,6 +413,33 @@ export default function Planner() {
         e.preventDefault();
         deleteBlockRef.current(selectedBlockIdRef.current);
         setSelectedBlockId(null);
+      } else if (mod && (e.key === 'c' || e.key === 'C')) {
+        const block = dataRef.current.timeBlocks.find(b => b.id === selectedBlockIdRef.current);
+        if (block) { clipboardRef.current = block; e.preventDefault(); }
+      } else if (mod && (e.key === 'x' || e.key === 'X')) {
+        const block = dataRef.current.timeBlocks.find(b => b.id === selectedBlockIdRef.current);
+        if (block) {
+          clipboardRef.current = block;
+          deleteBlockRef.current(block.id);
+          setSelectedBlockId(null);
+          e.preventDefault();
+        }
+      } else if (mod && (e.key === 'v' || e.key === 'V')) {
+        const clip = clipboardRef.current;
+        const col  = hoveredColumnRef.current;
+        if (clip && col && !lockedLocationsRef.current.has(col.location)) {
+          const newBlock: TimeBlock = {
+            ...clip,
+            id: uid(),
+            location: col.location,
+            weekNumber: col.weekNumber,
+            dayOfWeek: col.dayOfWeek,
+            syncGroupId: undefined,
+          };
+          updateRef.current(prev => ({ ...prev, timeBlocks: [...prev.timeBlocks, newBlock] }));
+          setSelectedBlockId(newBlock.id);
+          e.preventDefault();
+        }
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -522,6 +555,12 @@ export default function Planner() {
       return next;
     });
   }, []);
+
+  const handleColumnHover = useCallback(
+    (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => {
+      hoveredColumnRef.current = col;
+    }, []
+  );
 
   const toggleLock = useCallback((loc: Location) => {
     setLockedLocations(prev => {
@@ -958,6 +997,7 @@ export default function Planner() {
                   activeSyncLocation={selectedBlock?.location ?? null}
                   onSelectDay={handleSelectDay}
                   onColumnMouseDown={handleColumnMouseDown}
+                  onColumnHover={handleColumnHover}
                   onBlockMouseDown={handleBlockMouseDown}
                   onResizeMouseDown={handleResizeMouseDown}
                   onSelectBlock={id => { setSelectedBlockId(id); }}
@@ -1315,6 +1355,7 @@ interface WeekSectionProps {
   activeSyncLocation: Location | null;
   onSelectDay: (key: string) => void;
   onColumnMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
+  onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
   onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
   onSelectBlock: (id: string) => void;
@@ -1326,7 +1367,7 @@ function WeekSection({
   week, getBlocks, selectedBlockId, syncMode, syncPairId,
   dragState, lockedLocations, colRefs,
   dayNotes, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
-  onColumnMouseDown, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
+  onColumnMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
 }: WeekSectionProps) {
   const cw = getISOWeek(week.startDate);
@@ -1415,7 +1456,8 @@ function WeekSection({
               dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('VU')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
-              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
+              onMouseDown={onColumnMouseDown} onColumnHover={onColumnHover}
+              onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
             />
           ))}
@@ -1436,7 +1478,8 @@ function WeekSection({
               dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('UT')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
-              onMouseDown={onColumnMouseDown} onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
+              onMouseDown={onColumnMouseDown} onColumnHover={onColumnHover}
+              onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
             />
           ))}
@@ -1527,6 +1570,7 @@ interface DayColumnProps {
   activeSyncLocation: Location | null;
   colRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   onMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
+  onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
   onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
   onSelectBlock: (id: string) => void;
@@ -1538,7 +1582,7 @@ function DayColumn({
   location, weekNumber, dayOfWeek, blocks,
   selectedBlockId, syncMode, syncPairId,
   dragState, locked, hasActiveCourse, activeSyncGroupId, activeSyncLocation, colRefs,
-  onMouseDown, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
+  onMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
 }: DayColumnProps) {
   const key = colKey(location, weekNumber, dayOfWeek);
@@ -1577,6 +1621,8 @@ function DayColumn({
       className={cn('flex-1 relative select-none', dayOfWeek > 0 && 'border-l', !locked && hasActiveCourse && 'cursor-crosshair')}
       style={{ height: GRID_HEIGHT }}
       onClick={e => e.stopPropagation()}
+      onMouseEnter={() => onColumnHover({ location, weekNumber, dayOfWeek })}
+      onMouseLeave={() => onColumnHover(null)}
       onMouseDown={e => {
         if (!(e.target as HTMLElement).closest('[data-block]')) {
           onMouseDown(e, location, weekNumber, dayOfWeek);
