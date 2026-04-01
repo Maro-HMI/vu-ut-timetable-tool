@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { useAppData } from '@/lib/storage';
-import type { Location, TimeBlock, AppData, Module } from '@/lib/types';
-import { TRAVEL_ID, TRAVEL_COLOR, TRAVEL_NAME } from '@/lib/types';
+import type { Location, TimeBlock, AppData, Module, CabinBooking } from '@/lib/types';
+import { TRAVEL_ID, TRAVEL_COLOR, TRAVEL_NAME, CABIN_ID, CABIN_COLOR, CABIN_NAME } from '@/lib/types';
 import { deriveWeeks, formatTime, formatMonthDate, DAY_LABELS, type Week } from '@/lib/weeks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { cn } from '@/lib/utils';
 import {
   FiEye, FiEyeOff, FiLock, FiUnlock, FiPlus, FiTrash2, FiSettings,
-  FiDownload, FiUpload, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter, FiHelpCircle,
+  FiDownload, FiFolder, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter, FiHelpCircle, FiHome,
 } from 'react-icons/fi';
 
 /* ── Constants ─────────────────────────────────────────── */
@@ -25,6 +25,7 @@ const LOCATIONS: Location[] = ['VU', 'UT'];
 const TIME_AXIS_W = 28; // px
 const GAP_W       = 44; // px – gap between VU and UT sections
 const SIDEBAR_W   = 220; // px
+const CABIN_ROW_H = 14;  // px – slim row below day headers
 
 const COURSE_COLORS = [
   '#9B59B6', '#E67E22', '#3498DB', '#27AE60', '#F06292',
@@ -232,6 +233,11 @@ export default function Planner() {
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const [editDayNote, setEditDayNote]       = useState('');
 
+  const [selectedCabinId, setSelectedCabinId]   = useState<string | null>(null);
+  const [cabinDragState, setCabinDragState]     = useState<{ weekNumber: number; startDay: number; currentDay: number } | null>(null);
+  const [cabinResizeState, setCabinResizeState] = useState<{ bookingId: string; edge: 'start' | 'end'; weekNumber: number; currentFrac: number; sectionLeft: number; sectionWidth: number } | null>(null);
+  const [editCabinNotes, setEditCabinNotes]     = useState('');
+
   /* Refs */
   const colRefs              = useRef<Map<string, HTMLDivElement>>(new Map());
   const dragStateRef         = useRef<DragState | null>(null);
@@ -245,6 +251,12 @@ export default function Planner() {
   const clipboardRef         = useRef<TimeBlock | null>(null);
   const hoveredColumnRef     = useRef<{ location: Location; weekNumber: number; dayOfWeek: number } | null>(null);
   const lockedLocationsRef   = useRef<Set<Location>>(lockedLocations);
+  const selectedCabinIdRef    = useRef<string | null>(null);
+  const deleteCabinRef        = useRef<(id: string) => void>(() => {});
+  const cabinDragStateRef     = useRef<typeof cabinDragState>(null);
+  const cabinResizeStateRef   = useRef<typeof cabinResizeState>(null);
+  const weekSectionRefs       = useRef<Map<number, HTMLDivElement>>(new Map());
+  const scrollContainerRef    = useRef<HTMLDivElement>(null);
 
   useEffect(() => { dragStateRef.current = dragState; },             [dragState]);
   useEffect(() => { activeCourseRef.current = activeCourseId; },     [activeCourseId]);
@@ -253,6 +265,9 @@ export default function Planner() {
   useEffect(() => { selectedIdRef.current = selectedBlockId; },      [selectedBlockId]);
   useEffect(() => { selectedBlockIdRef.current = selectedBlockId; }, [selectedBlockId]);
   useEffect(() => { lockedLocationsRef.current = lockedLocations; }, [lockedLocations]);
+  useEffect(() => { selectedCabinIdRef.current = selectedCabinId; }, [selectedCabinId]);
+  useEffect(() => { cabinDragStateRef.current = cabinDragState; }, [cabinDragState]);
+  useEffect(() => { cabinResizeStateRef.current = cabinResizeState; }, [cabinResizeState]);
 
   /* Derived */
   const weeks = useMemo(() => {
@@ -275,6 +290,13 @@ export default function Planner() {
   useEffect(() => {
     if (selectedDayKey) setEditDayNote(data.dayNotes?.[selectedDayKey] ?? '');
   }, [selectedDayKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (selectedCabinId) {
+      const b = (data.cabinBookings ?? []).find(b => b.id === selectedCabinId);
+      setEditCabinNotes(b?.notes ?? '');
+    }
+  }, [selectedCabinId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const syncPairBlock = useMemo(() => {
     if (!selectedBlock?.syncGroupId) return null;
@@ -338,6 +360,7 @@ export default function Planner() {
           const newEnd = clamp(snap(min, SNAP_MIN), prev.startMin + SNAP_MIN, GRID_END);
           return { ...prev, endMin: newEnd };
         }
+        if (prev.type !== 'move') return prev;
         const newStart = clamp(snap(min - prev.offsetMin, SNAP_MIN), GRID_START, GRID_END - prev.duration);
         return { ...prev, startMin: newStart, endMin: newStart + prev.duration, dayOfWeek: targetDay };
       });
@@ -398,6 +421,65 @@ export default function Planner() {
     };
   }, []);
 
+  /* Cabin resize – live tracking */
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      setCabinResizeState(prev => {
+        if (!prev) return null;
+        const frac = clamp((e.clientX - prev.sectionLeft) / prev.sectionWidth * 5, 0, 5);
+        return { ...prev, currentFrac: frac };
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    return () => document.removeEventListener('mousemove', onMove);
+  }, []);
+
+  /* Cabin drag/resize – commit on mouseup */
+  useEffect(() => {
+    const onUp = () => {
+      // Resize commit
+      const rs = cabinResizeStateRef.current;
+      if (rs) {
+        setCabinResizeState(null);
+        updateRef.current(prev => ({
+          ...prev,
+          cabinBookings: (prev.cabinBookings ?? []).map(b => {
+            if (b.id !== rs.bookingId) return b;
+            const snapped  = Math.floor(rs.currentFrac);
+            const newStart = rs.edge === 'start' ? clamp(snapped, 0, b.endDay - 1) : b.startDay;
+            const newEnd   = rs.edge === 'end'   ? clamp(snapped, b.startDay + 1, 4) : b.endDay;
+            if (newEnd <= newStart) return b;
+            // no overlap with other bookings
+            const overlaps = (prev.cabinBookings ?? []).some(o =>
+              o.id !== b.id && o.weekNumber === b.weekNumber &&
+              newStart <= o.endDay && newEnd >= o.startDay
+            );
+            return overlaps ? b : { ...b, startDay: newStart, endDay: newEnd };
+          }),
+        }));
+        return;
+      }
+      // Create commit
+      const ds = cabinDragStateRef.current;
+      if (!ds) return;
+      setCabinDragState(null);
+      const s = Math.min(ds.startDay, ds.currentDay);
+      const e = Math.max(ds.startDay, ds.currentDay);
+      if (e <= s) return; // need at least 2 days (1 night)
+      updateRef.current(prev => {
+        // no stacking
+        const overlaps = (prev.cabinBookings ?? []).some(o =>
+          o.weekNumber === ds.weekNumber && s <= o.endDay && e >= o.startDay
+        );
+        if (overlaps) return prev;
+        const booking: CabinBooking = { id: uid(), weekNumber: ds.weekNumber, startDay: s, endDay: e };
+        return { ...prev, cabinBookings: [...(prev.cabinBookings ?? []), booking] };
+      });
+    };
+    document.addEventListener('mouseup', onUp);
+    return () => document.removeEventListener('mouseup', onUp);
+  }, []);
+
   /* Global keyboard shortcuts */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -408,11 +490,16 @@ export default function Planner() {
       if (e.key === 'Escape') {
         setSelectedBlockId(null);
         setSelectedDayKey(null);
+        setSelectedCabinId(null);
         setActiveCourseId(null);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockIdRef.current) {
         e.preventDefault();
         deleteBlockRef.current(selectedBlockIdRef.current);
         setSelectedBlockId(null);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedCabinIdRef.current) {
+        e.preventDefault();
+        deleteCabinRef.current(selectedCabinIdRef.current);
+        setSelectedCabinId(null);
       } else if (mod && (e.key === 'c' || e.key === 'C')) {
         const block = dataRef.current.timeBlocks.find(b => b.id === selectedBlockIdRef.current);
         if (block) { clipboardRef.current = block; e.preventDefault(); }
@@ -462,6 +549,22 @@ export default function Planner() {
   }, [update, selectedBlockId]);
   useEffect(() => { deleteBlockRef.current = deleteBlock; }, [deleteBlock]);
 
+  const deleteCabin = useCallback((id: string) => {
+    update(prev => ({ ...prev, cabinBookings: (prev.cabinBookings ?? []).filter(b => b.id !== id) }));
+    setSelectedCabinId(null);
+  }, [update]);
+  useEffect(() => { deleteCabinRef.current = deleteCabin; }, [deleteCabin]);
+
+  const saveCabinNotes = useCallback(() => {
+    if (!selectedCabinId) return;
+    update(prev => ({
+      ...prev,
+      cabinBookings: (prev.cabinBookings ?? []).map(b =>
+        b.id === selectedCabinId ? { ...b, notes: editCabinNotes.trim() || undefined } : b
+      ),
+    }));
+  }, [update, selectedCabinId, editCabinNotes]);
+
   const saveDayNote = useCallback(() => {
     if (!selectedDayKey) return;
     update(prev => {
@@ -474,6 +577,16 @@ export default function Planner() {
       return { ...prev, dayNotes };
     });
   }, [update, selectedDayKey, editDayNote]);
+
+  const clearDayNote = useCallback(() => {
+    if (!selectedDayKey) return;
+    setEditDayNote('');
+    update(prev => {
+      const dayNotes = { ...(prev.dayNotes ?? {}) };
+      delete dayNotes[selectedDayKey];
+      return { ...prev, dayNotes };
+    });
+  }, [update, selectedDayKey]);
 
   const handleSelectDay = useCallback((key: string) => {
     setSelectedDayKey(key);
@@ -489,6 +602,17 @@ export default function Planner() {
       ),
     }));
   }, [update, selectedBlock, editNotes]);
+
+  const clearBlockNotes = useCallback(() => {
+    if (!selectedBlock) return;
+    setEditNotes('');
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        b.id === selectedBlock.id ? { ...b, notes: undefined } : b
+      ),
+    }));
+  }, [update, selectedBlock]);
 
   const saveBlockPlace = useCallback(() => {
     if (!selectedBlock) return;
@@ -561,6 +685,46 @@ export default function Planner() {
       hoveredColumnRef.current = col;
     }, []
   );
+
+  const handleCabinMouseDown = useCallback((weekNumber: number, day: number) => {
+    if (activeCourseId !== CABIN_ID) return;
+    if (lockedLocations.has('VU')) return;
+    setSelectedCabinId(null);
+    setSelectedBlockId(null);
+    setSelectedDayKey(null);
+    setCabinDragState({ weekNumber, startDay: day, currentDay: day });
+  }, [activeCourseId, lockedLocations]);
+
+  const handleCabinMouseEnter = useCallback((weekNumber: number, day: number) => {
+    setCabinDragState(prev => {
+      if (!prev || prev.weekNumber !== weekNumber) return prev;
+      return { ...prev, currentDay: day };
+    });
+  }, []);
+
+  const handleCabinResizeMouseDown = useCallback((e: React.MouseEvent, bookingId: string, edge: 'start' | 'end', weekNumber: number, startFrac: number, sectionLeft: number, sectionWidth: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setCabinResizeState({ bookingId, edge, weekNumber, currentFrac: startFrac, sectionLeft, sectionWidth });
+  }, []);
+
+  const handleCabinSelect = useCallback((id: string) => {
+    setSelectedCabinId(id);
+    setSelectedBlockId(null);
+    setSelectedDayKey(null);
+  }, []);
+
+  const registerWeekRef = useCallback((weekNumber: number, el: HTMLDivElement | null) => {
+    if (el) weekSectionRefs.current.set(weekNumber, el);
+    else weekSectionRefs.current.delete(weekNumber);
+  }, []);
+
+  const scrollToWeek = useCallback((weekNumber: number) => {
+    const el = weekSectionRefs.current.get(weekNumber);
+    const container = scrollContainerRef.current;
+    if (!el || !container) return;
+    container.scrollTo({ top: el.offsetTop - 32, behavior: 'smooth' });
+  }, []);
 
   const toggleLock = useCallback((loc: Location) => {
     setLockedLocations(prev => {
@@ -642,6 +806,7 @@ export default function Planner() {
     (e: React.MouseEvent, location: Location, weekNumber: number, dayOfWeek: number) => {
       if (e.button !== 0) return;
       if (lockedLocations.has(location)) return;
+      setSelectedCabinId(null);
       if (!activeCourseRef.current) {
         setSelectedDayKey(null);
         setSelectedBlockId(null);
@@ -721,7 +886,7 @@ export default function Planner() {
             <div className="flex items-center justify-center gap-2">
               <Button size="sm" onClick={() => setShowModuleSetup(true)}>Create Module</Button>
               <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
-                <FiUpload size={13} className="mr-1.5" /> Load from File
+                <FiFolder size={13} className="mr-1.5" /> Load from File
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setShowHelp(true)}>
                 <FiHelpCircle size={13} className="mr-1.5" /> Help
@@ -770,6 +935,13 @@ export default function Planner() {
               isHidden={hiddenCourseIds.has(TRAVEL_ID)}
               onActivate={() => setActiveCourseId(prev => prev === TRAVEL_ID ? null : TRAVEL_ID)}
               onToggleVisibility={() => toggleVisibility(TRAVEL_ID)}
+            />
+            <CourseItem
+              id={CABIN_ID} name={CABIN_NAME} color={CABIN_COLOR} isCabin
+              isActive={activeCourseId === CABIN_ID}
+              isHidden={false}
+              onActivate={() => setActiveCourseId(prev => prev === CABIN_ID ? null : CABIN_ID)}
+              onToggleVisibility={() => {}}
             />
 
             <div className="mt-3 mb-1">
@@ -870,7 +1042,12 @@ export default function Planner() {
                 Click a course to activate it, then drag on the calendar to add entries.
               </p>
             )}
-            {activeCourseId && (
+            {activeCourseId === CABIN_ID && (
+              <p className="text-[10px] px-1 mt-2 italic" style={{ color: CABIN_COLOR }}>
+                Active: Cabin — drag across days (VU side) to mark stays
+              </p>
+            )}
+            {activeCourseId && activeCourseId !== CABIN_ID && (
               <p className="text-[10px] px-1 mt-2 italic" style={{ color: getCourseColor(activeCourseId) }}>
                 Active: {getCourseName(activeCourseId)} — drag to create
               </p>
@@ -883,7 +1060,42 @@ export default function Planner() {
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mt-2 mb-1">
               Current Block
             </p>
-            {selectedBlock ? (
+            {selectedCabinId && (() => {
+              const booking = (data.cabinBookings ?? []).find(b => b.id === selectedCabinId);
+              if (!booking) return null;
+              const night = booking.endDay - booking.startDay;
+              const checkOut = DAY_LABELS[booking.endDay];
+              return (
+                <div className="space-y-2 pt-0.5" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center gap-2">
+                    <FiHome size={13} style={{ color: CABIN_COLOR }} />
+                    <span className="text-xs font-semibold">Cabin stay</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    <p><strong>Week</strong> {booking.weekNumber}</p>
+                    <p><strong>Check-in</strong> {DAY_LABELS[booking.startDay]}</p>
+                    <p><strong>Check-out</strong> {checkOut} morning</p>
+                    <p><strong>Nights</strong> {night}</p>
+                  </div>
+                  <div className="space-y-1 mt-1">
+                    <Label className="text-[10px]">Notes</Label>
+                    <Textarea value={editCabinNotes} onChange={e => setEditCabinNotes(e.target.value)}
+                      placeholder="Add notes…" className="text-xs min-h-[48px] resize-none" rows={2} />
+                    <div className="flex gap-1.5" style={{ marginTop: '0.5rem' }}>
+                      {editCabinNotes !== (booking.notes ?? '') && (
+                        <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={saveCabinNotes}>Confirm</Button>
+                      )}
+                      <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={() => { setEditCabinNotes(''); update(prev => ({ ...prev, cabinBookings: (prev.cabinBookings ?? []).map(b => b.id === selectedCabinId ? { ...b, notes: undefined } : b) })); }}>Clear</Button>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-full h-7 text-[10px] text-red-600/80 border-red-200 hover:bg-red-50 hover:border-red-300" style={{ marginTop: '1.5rem' }}
+                    onClick={() => deleteCabin(selectedCabinId)}>
+                    <FiTrash2 size={12} className="mr-1" /> Delete Booking
+                  </Button>
+                </div>
+              );
+            })()}
+            {!selectedCabinId && selectedBlock ? (
               <BlockDetails
                 block={selectedBlock}
                 courseColor={getCourseColor(selectedBlock.courseId)}
@@ -895,6 +1107,7 @@ export default function Planner() {
                 numWeeks={data.module.numWeeks}
                 onEditNotes={setEditNotes}
                 onSaveNotes={saveBlockNotes}
+                onClearNotes={clearBlockNotes}
                 onEditPlace={setEditPlace}
                 onSavePlace={saveBlockPlace}
                 onUpdatePosition={updateBlockPosition}
@@ -907,25 +1120,27 @@ export default function Planner() {
                   syncPairBlock ? `${syncPairBlock.location} W${syncPairBlock.weekNumber} ${DAY_LABELS[syncPairBlock.dayOfWeek]}` : ''
                 }
               />
-            ) : selectedDayKey ? (
+            ) : !selectedCabinId && selectedDayKey ? (
               <DayNoteEditor
+                key={selectedDayKey}
                 dayKey={selectedDayKey}
                 note={editDayNote}
                 onChangeNote={setEditDayNote}
                 onSaveNote={saveDayNote}
+                onClearNote={clearDayNote}
               />
-            ) : (
+            ) : !selectedCabinId && !selectedBlock && !selectedDayKey ? (
               <p className="text-[10px] text-muted-foreground text-center py-4 italic">
                 Click a calendar entry or day to see details.
               </p>
-            )}
+            ) : null}
           </div>
         </div>
 
         {/* ── Calendar Area ─────────────────────────────── */}
         <div
           className="flex flex-col flex-1 min-w-0"
-          onClick={() => { setSelectedBlockId(null); setSelectedDayKey(null); }}
+          onClick={() => { setSelectedBlockId(null); setSelectedDayKey(null); setSelectedCabinId(null); }}
         >
           {/* Module header row */}
           <div className="flex-shrink-0 border-b bg-card z-30 flex items-center h-8 gap-1.5 px-3">
@@ -941,7 +1156,7 @@ export default function Planner() {
               <FiDownload size={11} /> Save to File
             </button>
             <button onClick={e => { e.stopPropagation(); fileInputRef.current?.click(); }} className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded transition-colors flex-shrink-0 flex items-center gap-1">
-              <FiUpload size={11} /> Load from File
+              <FiFolder size={11} /> Load from File
             </button>
             <button title="Export PDF" onClick={e => { e.stopPropagation(); generatePDF(data, weeks); }} className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded transition-colors flex-shrink-0 flex items-center gap-1">
               <FiPrinter size={11} /> PDF
@@ -951,35 +1166,34 @@ export default function Planner() {
             />
           </div>
 
-          {/* VU / UT header row */}
-          <div className="flex-shrink-0 border-b bg-card z-30 flex h-8">
-            <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
-            <div className="flex-1 flex items-center justify-center gap-2">
-              <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
-              <button
-                title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
-                onClick={e => { e.stopPropagation(); toggleLock('VU'); }}
-                className={cn('p-0.5 rounded transition-colors', lockedLocations.has('VU') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
-              >
-                {lockedLocations.has('VU') ? <FiLock size={13} /> : <FiUnlock size={13} />}
-              </button>
-            </div>
-            <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
-            <div className="flex-1 flex items-center justify-center gap-2">
-              <span className="text-xs font-bold tracking-wider">UTwente</span>
-              <button
-                title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
-                onClick={e => { e.stopPropagation(); toggleLock('UT'); }}
-                className={cn('p-0.5 rounded transition-colors', lockedLocations.has('UT') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
-              >
-                {lockedLocations.has('UT') ? <FiLock size={13} /> : <FiUnlock size={13} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Scrollable weeks */}
-          <div className="flex-1 overflow-y-auto overflow-x-auto">
+          {/* Scrollable weeks – VU/UT header lives inside so it scrolls horizontally with content */}
+          <div className="flex-1 overflow-y-auto overflow-x-auto" ref={scrollContainerRef}>
             <div className="min-w-[700px]">
+              {/* VU / UT header row – sticky vertically, scrolls with content horizontally */}
+              <div className="sticky top-0 z-30 border-b bg-card flex h-8">
+                <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
+                <div className="flex-1 flex items-center justify-center gap-2">
+                  <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
+                  <button
+                    title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
+                    onClick={e => { e.stopPropagation(); toggleLock('VU'); }}
+                    className={cn('p-0.5 rounded transition-colors', lockedLocations.has('VU') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
+                  >
+                    {lockedLocations.has('VU') ? <FiLock size={13} /> : <FiUnlock size={13} />}
+                  </button>
+                </div>
+                <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
+                <div className="flex-1 flex items-center justify-center gap-2">
+                  <span className="text-xs font-bold tracking-wider">UTwente</span>
+                  <button
+                    title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
+                    onClick={e => { e.stopPropagation(); toggleLock('UT'); }}
+                    className={cn('p-0.5 rounded transition-colors', lockedLocations.has('UT') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
+                  >
+                    {lockedLocations.has('UT') ? <FiLock size={13} /> : <FiUnlock size={13} />}
+                  </button>
+                </div>
+              </div>
               {weeks.map(week => (
                 <WeekSection
                   key={week.weekNumber} week={week}
@@ -992,7 +1206,7 @@ export default function Planner() {
                   colRefs={colRefs}
                   dayNotes={data.dayNotes ?? {}}
                   selectedDayKey={selectedDayKey}
-                  hasActiveCourse={activeCourseId !== null}
+                  hasActiveCourse={activeCourseId !== null && activeCourseId !== CABIN_ID}
                   activeSyncGroupId={selectedBlock?.syncGroupId ?? null}
                   activeSyncLocation={selectedBlock?.location ?? null}
                   onSelectDay={handleSelectDay}
@@ -1000,9 +1214,21 @@ export default function Planner() {
                   onColumnHover={handleColumnHover}
                   onBlockMouseDown={handleBlockMouseDown}
                   onResizeMouseDown={handleResizeMouseDown}
-                  onSelectBlock={id => { setSelectedBlockId(id); }}
+                  onSelectBlock={id => { setSelectedBlockId(id); setSelectedCabinId(null); }}
+                  cabinBookings={(data.cabinBookings ?? []).filter(b => b.weekNumber === week.weekNumber)}
+                  cabinDragState={cabinDragState?.weekNumber === week.weekNumber ? cabinDragState : null}
+                  cabinActive={activeCourseId === CABIN_ID && !lockedLocations.has('VU')}
+                  selectedCabinId={selectedCabinId}
+                  cabinResizeState={cabinResizeState?.weekNumber === week.weekNumber ? cabinResizeState : null}
+                  onCabinMouseDown={handleCabinMouseDown}
+                  onCabinMouseEnter={handleCabinMouseEnter}
+                  onCabinResizeMouseDown={handleCabinResizeMouseDown}
+                  onCabinSelect={handleCabinSelect}
                   getCourseColor={getCourseColor}
                   getCourseName={getCourseName}
+                  onRegisterRef={registerWeekRef}
+                  allWeeks={weeks}
+                  onScrollToWeek={scrollToWeek}
                 />
               ))}
             </div>
@@ -1021,7 +1247,7 @@ export default function Planner() {
       )}
 
       <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
-      <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} onClearData={data.courses.length > 0 || data.timeBlocks.length > 0 || Object.keys(data.dayNotes).length > 0 ? () => { reset(); setShowModuleSettings(false); } : undefined} />
+      <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} onClearData={data.courses.length > 0 || data.timeBlocks.length > 0 || Object.keys(data.dayNotes ?? {}).length > 0 || (data.cabinBookings?.length ?? 0) > 0 ? () => { reset(); setShowModuleSettings(false); } : undefined} />
       <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
@@ -1125,15 +1351,16 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 /* ── Course Item ───────────────────────────────────────── */
 interface CourseItemProps {
-  id: string; name: string; color: string; isTravel?: boolean;
+  id: string; name: string; color: string; isTravel?: boolean; isCabin?: boolean;
   isActive: boolean; isHidden: boolean;
   hoursVU?: number; hoursUT?: number;
   onActivate: () => void; onToggleVisibility: () => void;
   onEdit?: () => void; onDelete?: () => void;
 }
 
-function CourseItem({ id, name, color, isTravel, isActive, isHidden, hoursVU, hoursUT, onActivate, onToggleVisibility, onEdit, onDelete }: CourseItemProps) {
-  const showHours = !isTravel && (hoursVU !== undefined || hoursUT !== undefined);
+function CourseItem({ id, name, color, isTravel, isCabin, isActive, isHidden, hoursVU, hoursUT, onActivate, onToggleVisibility, onEdit, onDelete }: CourseItemProps) {
+  const showHours = !isTravel && !isCabin && (hoursVU !== undefined || hoursUT !== undefined);
+  const isSpecial = isTravel || isCabin;
   return (
     <div
       className={cn(
@@ -1142,9 +1369,11 @@ function CourseItem({ id, name, color, isTravel, isActive, isHidden, hoursVU, ho
       )}
       onClick={onActivate}
     >
-      <div className={cn('flex-shrink-0', isTravel ? 'mt-[1px]' : 'mt-[3px]')}>
+      <div className={cn('flex-shrink-0', isSpecial ? 'mt-[1px]' : 'mt-[3px]')}>
         {isTravel
           ? <FiSend size={11} style={{ color }} />
+          : isCabin
+          ? <FiHome size={11} style={{ color }} />
           : <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
         }
       </div>
@@ -1159,11 +1388,13 @@ function CourseItem({ id, name, color, isTravel, isActive, isHidden, hoursVU, ho
           </span>
         )}
       </div>
-      <button onClick={e => { e.stopPropagation(); onToggleVisibility(); }}
-        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-opacity"
-        title={isHidden ? 'Show' : 'Hide'}>
-        {isHidden ? <FiEyeOff size={11} /> : <FiEye size={11} />}
-      </button>
+      {!isCabin && (
+        <button onClick={e => { e.stopPropagation(); onToggleVisibility(); }}
+          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-opacity"
+          title={isHidden ? 'Show' : 'Hide'}>
+          {isHidden ? <FiEyeOff size={11} /> : <FiEye size={11} />}
+        </button>
+      )}
       {onEdit && (
         <button onClick={e => { e.stopPropagation(); onEdit(); }}
           className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-opacity"
@@ -1187,7 +1418,7 @@ interface BlockDetailsProps {
   block: TimeBlock; courseColor: string; courseName: string;
   syncPair: TimeBlock | null; syncMode: boolean;
   editNotes: string; editPlace: string; numWeeks: number;
-  onEditNotes: (v: string) => void; onSaveNotes: () => void;
+  onEditNotes: (v: string) => void; onSaveNotes: () => void; onClearNotes: () => void;
   onEditPlace: (v: string) => void; onSavePlace: () => void;
   onUpdatePosition: (week: number, day: number, start: number, end: number) => void;
   onToggleAtTwente: () => void;
@@ -1197,7 +1428,7 @@ interface BlockDetailsProps {
 
 function BlockDetails({
   block, courseColor, courseName, syncPair, syncMode,
-  editNotes, editPlace, numWeeks, onEditNotes, onSaveNotes, onEditPlace, onSavePlace, onUpdatePosition,
+  editNotes, editPlace, numWeeks, onEditNotes, onSaveNotes, onClearNotes, onEditPlace, onSavePlace, onUpdatePosition,
   onToggleAtTwente,
   onDelete, onStartSync, onCancelSync, onUnlink, getSyncPartnerName,
 }: BlockDetailsProps) {
@@ -1273,17 +1504,19 @@ function BlockDetails({
         </div>
       </div>
 
-      {/* Place / room label */}
-      <div className="space-y-0.5">
-        <Label className="text-[10px] text-muted-foreground">Location</Label>
-        <Input
-          value={editPlace}
-          onChange={e => onEditPlace(e.target.value)}
-          onBlur={onSavePlace}
-          placeholder="e.g. NU-3A22"
-          className="h-7 text-xs"
-        />
-      </div>
+      {/* Place / room label – not shown for Travel */}
+      {block.courseId !== TRAVEL_ID && (
+        <div className="space-y-0.5">
+          <Label className="text-[10px] text-muted-foreground">Location</Label>
+          <Input
+            value={editPlace}
+            onChange={e => onEditPlace(e.target.value)}
+            onBlur={onSavePlace}
+            placeholder="e.g. NU-3A22"
+            className="h-7 text-xs"
+          />
+        </div>
+      )}
 
       {/* At Twente – VU blocks only */}
       {isVUBlock && (
@@ -1301,8 +1534,14 @@ function BlockDetails({
       {/* Notes */}
       <div className="space-y-1">
         <Label className="text-[10px]">Notes</Label>
-        <Textarea value={editNotes} onChange={e => onEditNotes(e.target.value)} onBlur={onSaveNotes}
+        <Textarea value={editNotes} onChange={e => onEditNotes(e.target.value)}
           placeholder="Add notes…" className="text-xs min-h-[48px] resize-none" rows={2} />
+        <div className="flex gap-1.5" style={{ marginTop: '0.5rem' }}>
+          {editNotes !== (block.notes ?? '') && (
+            <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={onSaveNotes}>Confirm</Button>
+          )}
+          <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={onClearNotes}>Clear</Button>
+        </div>
       </div>
 
       {/* Sync */}
@@ -1331,7 +1570,7 @@ function BlockDetails({
         </div>
       )}
 
-      <Button variant="destructive" size="sm" className="w-full h-7 text-[10px] mt-1" onClick={onDelete}>
+      <Button variant="outline" size="sm" className="w-full h-7 text-[10px] text-red-600/80 border-red-200 hover:bg-red-50 hover:border-red-300" style={{ marginTop: '1.5rem' }} onClick={onDelete}>
         <FiTrash2 size={12} className="mr-1" /> Delete entry
       </Button>
     </div>
@@ -1353,83 +1592,200 @@ interface WeekSectionProps {
   hasActiveCourse: boolean;
   activeSyncGroupId: string | null;
   activeSyncLocation: Location | null;
+  cabinBookings: CabinBooking[];
+  cabinDragState: { weekNumber: number; startDay: number; currentDay: number } | null;
+  cabinResizeState: { bookingId: string; edge: 'start' | 'end'; weekNumber: number; currentFrac: number; sectionLeft: number; sectionWidth: number } | null;
+  cabinActive: boolean;
+  selectedCabinId: string | null;
   onSelectDay: (key: string) => void;
   onColumnMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
   onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
   onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
   onSelectBlock: (id: string) => void;
+  onCabinMouseDown: (wn: number, d: number) => void;
+  onCabinMouseEnter: (wn: number, d: number) => void;
+  onCabinResizeMouseDown: (e: React.MouseEvent, bookingId: string, edge: 'start' | 'end', wn: number, startFrac: number, sectionLeft: number, sectionWidth: number) => void;
+  onCabinSelect: (id: string) => void;
   getCourseColor: (id: string) => string;
   getCourseName: (id: string) => string;
+  onRegisterRef: (weekNumber: number, el: HTMLDivElement | null) => void;
+  allWeeks: Week[];
+  onScrollToWeek: (weekNumber: number) => void;
 }
 
 function WeekSection({
   week, getBlocks, selectedBlockId, syncMode, syncPairId,
   dragState, lockedLocations, colRefs,
   dayNotes, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
+  cabinBookings, cabinDragState, cabinResizeState, cabinActive, selectedCabinId,
   onColumnMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
-  getCourseColor, getCourseName,
+  onCabinMouseDown, onCabinMouseEnter, onCabinResizeMouseDown, onCabinSelect,
+  getCourseColor, getCourseName, onRegisterRef, allWeeks, onScrollToWeek,
 }: WeekSectionProps) {
   const cw = getISOWeek(week.startDate);
   const [dayHover, setDayHover] = useState<{ note: string; x: number; y: number } | null>(null);
+  const vuCabinRowRef = useRef<HTMLDivElement | null>(null);
 
   return (
-    <div className="border-b-2">
+    <div className="border-b-2" ref={el => onRegisterRef(week.weekNumber, el)}>
       {/* Sticky week header */}
-      <div className="sticky top-0 z-20 flex bg-white">
-        {/* Time axis slot – same bg as grid, no bottom border so it reads as one column */}
-        <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0 border-r bg-slate-100" />
-        {/* VU day headers */}
-        <div className="flex-1 flex border-r border-b-2">
-          {week.days.map((day, di) => {
-            const dKey = colKey('VU', week.weekNumber, di);
-            const note = dayNotes[dKey];
-            return (
-              <div
-                key={di}
-                className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
-                onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
-                onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
-                onMouseLeave={note ? () => setDayHover(null) : undefined}
-              >
-                {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
-              </div>
-            );
-          })}
+      <div className="sticky top-8 z-20 bg-white">
+        {/* Day labels row */}
+        <div className="flex">
+          {/* Time axis slot */}
+          <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0 border-r bg-slate-100" />
+          {/* VU day headers */}
+          <div className="flex-1 flex border-r border-b">
+            {week.days.map((day, di) => {
+              const dKey = colKey('VU', week.weekNumber, di);
+              const note = dayNotes[dKey];
+              const vuLocked = lockedLocations.has('VU');
+              return (
+                <div
+                  key={di}
+                  className={cn('flex-1 text-center py-1 relative transition-colors', di > 0 && 'border-l', !vuLocked && 'cursor-pointer hover:bg-muted/20')}
+                  onClick={e => { e.stopPropagation(); if (!vuLocked) onSelectDay(dKey); }}
+                  onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
+                  onMouseLeave={note ? () => setDayHover(null) : undefined}
+                >
+                  {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
+                  <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
+                  <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Gap W/CW */}
+          <div
+            style={{ width: GAP_W, minWidth: GAP_W }}
+            className="flex-shrink-0 flex flex-col items-center justify-center border-r border-b bg-muted/20 py-0.5"
+          >
+            <span className="text-[12px] font-bold leading-none text-foreground" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              W {week.weekNumber}
+            </span>
+            <span className="text-[9px] leading-none text-muted-foreground mt-0.5" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              CW {cw}
+            </span>
+          </div>
+          {/* UT day headers */}
+          <div className="flex-1 flex border-b">
+            {week.days.map((day, di) => {
+              const dKey = colKey('UT', week.weekNumber, di);
+              const note = dayNotes[dKey];
+              const utLocked = lockedLocations.has('UT');
+              return (
+                <div
+                  key={di}
+                  className={cn('flex-1 text-center py-1 relative transition-colors', di > 0 && 'border-l', !utLocked && 'cursor-pointer hover:bg-muted/20')}
+                  onClick={e => { e.stopPropagation(); if (!utLocked) onSelectDay(dKey); }}
+                  onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
+                  onMouseLeave={note ? () => setDayHover(null) : undefined}
+                >
+                  {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
+                  <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
+                  <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        {/* Gap W/CW */}
-        <div
-          style={{ width: GAP_W, minWidth: GAP_W }}
-          className="flex-shrink-0 flex flex-col items-center justify-center border-r border-b-2 bg-muted/20 py-0.5"
-        >
-          <span className="text-[10px] font-bold leading-none text-foreground" style={{ fontVariantNumeric: 'tabular-nums' }}>
-            W{week.weekNumber}
-          </span>
-          <span className="text-[9px] leading-none text-muted-foreground mt-0.5" style={{ fontVariantNumeric: 'tabular-nums' }}>
-            CW{cw}
-          </span>
-        </div>
-        {/* UT day headers */}
-        <div className="flex-1 flex border-b-2">
-          {week.days.map((day, di) => {
-            const dKey = colKey('UT', week.weekNumber, di);
-            const note = dayNotes[dKey];
-            return (
-              <div
-                key={di}
-                className={cn('flex-1 text-center py-1 relative cursor-pointer hover:bg-muted/20 transition-colors', di > 0 && 'border-l')}
-                onClick={e => { e.stopPropagation(); onSelectDay(dKey); }}
-                onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
-                onMouseLeave={note ? () => setDayHover(null) : undefined}
-              >
-                {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
-              </div>
-            );
-          })}
+
+        {/* Cabin row */}
+        <div className="flex" style={{ height: CABIN_ROW_H }}>
+          {/* Time axis – clean, no icon, no bottom border */}
+          <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }}
+            className="flex-shrink-0 border-r bg-slate-100" />
+          {/* VU cabin cells */}
+          <div ref={vuCabinRowRef} className="flex-1 relative border-r border-b-2 flex" style={{ height: CABIN_ROW_H }}>
+            {Array.from({ length: 5 }, (_, di) => (
+              <div key={di}
+                className={cn('flex-1 transition-colors', di > 0 && 'border-l',
+                  cabinActive ? 'cursor-crosshair bg-slate-200/60 hover:bg-slate-300/70' : '')}
+                onMouseDown={e => { e.stopPropagation(); onCabinMouseDown(week.weekNumber, di); }}
+                onMouseEnter={() => onCabinMouseEnter(week.weekNumber, di)}
+              />
+            ))}
+            {/* Existing bookings */}
+            {cabinBookings.map(b => {
+              const rs = cabinResizeState?.bookingId === b.id ? cabinResizeState : null;
+              const isSelected = selectedCabinId === b.id;
+              const dispLeftPct  = rs?.edge === 'start' ? rs.currentFrac * 20       : (b.startDay + 0.2) * 20;
+              const dispRightPct = rs?.edge === 'end'   ? rs.currentFrac * 20       : (b.endDay + 0.8) * 20;
+              const barLeft  = Math.min(dispLeftPct, dispRightPct);
+              const barWidth = Math.max(dispRightPct - dispLeftPct, 0);
+              return (
+                <div key={b.id} className="absolute inset-y-1 group/cabin"
+                  style={{ left: `${barLeft}%`, width: `${barWidth}%` }}>
+                  <div
+                    className={cn('w-full h-full rounded',
+                      !lockedLocations.has('VU') && 'cursor-pointer',
+                      isSelected ? 'ring-2 ring-slate-500 ring-offset-0' : (!lockedLocations.has('VU') && 'hover:opacity-90'))}
+                    style={{ backgroundColor: CABIN_COLOR, opacity: isSelected ? 1 : 0.7 }}
+                    onClick={e => { e.stopPropagation(); if (!lockedLocations.has('VU')) onCabinSelect(b.id); }}
+                  />
+                  {/* Resize handles – only when selected */}
+                  {isSelected && (
+                    <>
+                      <div className="absolute top-0 left-0 bottom-0 w-2.5 cursor-ew-resize flex items-center justify-center z-10"
+                        onMouseDown={e => {
+                          const rect = vuCabinRowRef.current?.getBoundingClientRect();
+                          if (rect) onCabinResizeMouseDown(e, b.id, 'start', week.weekNumber, b.startDay + 0.2, rect.left, rect.width);
+                        }}>
+                        <div className="w-0.5 h-3/4 rounded-full bg-white/80" />
+                      </div>
+                      <div className="absolute top-0 right-0 bottom-0 w-2.5 cursor-ew-resize flex items-center justify-center z-10"
+                        onMouseDown={e => {
+                          const rect = vuCabinRowRef.current?.getBoundingClientRect();
+                          if (rect) onCabinResizeMouseDown(e, b.id, 'end', week.weekNumber, b.endDay + 0.8, rect.left, rect.width);
+                        }}>
+                        <div className="w-0.5 h-3/4 rounded-full bg-white/80" />
+                      </div>
+                    </>
+                  )}
+                  {/* Notes hover tooltip */}
+                  {b.notes && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-popover border rounded shadow-md px-2 py-1 text-[10px] whitespace-pre-wrap max-w-[160px] pointer-events-none opacity-0 group-hover/cabin:opacity-100 transition-opacity z-50">
+                      {b.notes}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {/* Snap preview – semi-transparent bar showing snap-to position */}
+            {cabinResizeState && (() => {
+              const b = cabinBookings.find(bk => bk.id === cabinResizeState.bookingId);
+              if (!b) return null;
+              const snapped   = Math.floor(cabinResizeState.currentFrac);
+              const snapLeft  = cabinResizeState.edge === 'start' ? (snapped + 0.2) * 20 : (b.startDay + 0.2) * 20;
+              const snapRight = cabinResizeState.edge === 'end'   ? (snapped + 0.8) * 20 : (b.endDay + 0.8) * 20;
+              const ghostLeft  = Math.min(snapLeft, snapRight);
+              const ghostWidth = Math.max(snapRight - snapLeft, 0);
+              return (
+                <div className="absolute inset-y-1 pointer-events-none z-20 rounded"
+                  style={{ left: `${ghostLeft}%`, width: `${ghostWidth}%`, backgroundColor: CABIN_COLOR, opacity: 0.35 }} />
+              );
+            })()}
+            {/* Drag preview – only shown when spanning ≥2 days */}
+            {cabinDragState && cabinDragState.currentDay !== cabinDragState.startDay && (() => {
+              const s = Math.min(cabinDragState.startDay, cabinDragState.currentDay);
+              const e = Math.max(cabinDragState.startDay, cabinDragState.currentDay);
+              return (
+                <div className="absolute inset-y-1 rounded pointer-events-none z-10 border border-slate-400"
+                  style={{ left: `${(s + 0.2) * 20}%`, width: `${(e - s + 0.6) * 20}%`, backgroundColor: `${CABIN_COLOR}44` }}
+                />
+              );
+            })()}
+          </div>
+          {/* Gap */}
+          <div style={{ width: GAP_W, minWidth: GAP_W }}
+            className="flex-shrink-0 border-r border-b-2 bg-muted/20" />
+          {/* UT cabin row – visual spacer only */}
+          <div className="flex-1 relative flex border-b-2 bg-muted/5" style={{ height: CABIN_ROW_H }}>
+            {Array.from({ length: 5 }, (_, di) => (
+              <div key={di} className={cn('flex-1', di > 0 && 'border-l border-border/40')} />
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1439,10 +1795,10 @@ function WeekSection({
           style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W, height: GRID_HEIGHT }}
           className="flex-shrink-0 border-r relative overflow-visible bg-slate-100"
         >
-          {Array.from({ length: 11 }, (_, i) => (
+          {Array.from({ length: 9 }, (_, i) => (
             <div key={i} className="absolute right-1 text-[9px] text-muted-foreground leading-none"
-              style={{ top: i * HOUR_HEIGHT + 1, fontVariantNumeric: 'tabular-nums' }}>
-              {8 + i}:00
+              style={{ top: (i + 1) * HOUR_HEIGHT, transform: 'translateY(-50%)', fontVariantNumeric: 'tabular-nums' }}>
+              {9 + i}:00
             </div>
           ))}
         </div>
@@ -1463,11 +1819,39 @@ function WeekSection({
           ))}
         </div>
 
-        {/* Gap column – plain white */}
-        <div
-          style={{ width: GAP_W, minWidth: GAP_W, height: GRID_HEIGHT }}
-          className="flex-shrink-0 border-r bg-white"
-        />
+        {/* Gap column – week nav dots */}
+        {(() => {
+          const n = allWeeks.length;
+          const dotGap = n > 1 ? Math.min(18, Math.max(4, Math.floor((GRID_HEIGHT - 16) / Math.max(n - 1, 1)))) : 0;
+          return (
+            <div
+              style={{ width: GAP_W, minWidth: GAP_W, height: GRID_HEIGHT }}
+              className="flex-shrink-0 border-r bg-white flex flex-col items-center justify-center"
+            >
+              {n > 1 && (
+                <div className="flex flex-col items-center" style={{ gap: dotGap }}>
+                  {allWeeks.map(w => {
+                    const isActive = w.weekNumber === week.weekNumber;
+                    return (
+                      <button
+                        key={w.weekNumber}
+                        title={`Go to week ${w.weekNumber}`}
+                        onClick={e => { e.stopPropagation(); onScrollToWeek(w.weekNumber); }}
+                        className="rounded-full transition-all duration-150 hover:scale-125 flex-shrink-0"
+                        style={{
+                          width: isActive ? 8 : 5,
+                          height: isActive ? 8 : 5,
+                          backgroundColor: isActive ? '#475569' : '#94a3b8',
+                          opacity: isActive ? 1 : 0.55,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="flex-1 flex relative">
           <GridLines />
@@ -1513,11 +1897,12 @@ function WeekSection({
 /* ── Day Note Editor ───────────────────────────────────── */
 interface DayNoteEditorProps {
   dayKey: string; note: string;
-  onChangeNote: (v: string) => void; onSaveNote: () => void;
+  onChangeNote: (v: string) => void; onSaveNote: () => void; onClearNote: () => void;
 }
 
-function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote }: DayNoteEditorProps) {
+function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote, onClearNote }: DayNoteEditorProps) {
   const parsed = parseDayKey(dayKey);
+  const [initialNote] = useState(note);
   return (
     <div className="space-y-2 pt-0.5" onClick={e => e.stopPropagation()}>
       {parsed && (
@@ -1531,12 +1916,17 @@ function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote }: DayNoteEditor
         <Textarea
           value={note}
           onChange={e => onChangeNote(e.target.value)}
-          onBlur={onSaveNote}
           placeholder="Add a note for this day…"
           className="text-xs min-h-[48px] resize-none"
           rows={3}
           autoFocus
         />
+        <div className="flex gap-1.5" style={{ marginTop: '0.5rem' }}>
+          {note !== initialNote && (
+            <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={onSaveNote}>Confirm</Button>
+          )}
+          <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={onClearNote}>Clear</Button>
+        </div>
       </div>
     </div>
   );
@@ -1853,6 +2243,21 @@ td{border:1px solid #e5e7eb;padding:3px 4px;vertical-align:top;min-height:36px}
         lines.push(`</td>`);
       }
       lines.push(`</tr>`);
+    }
+    lines.push(`</table></div>`);
+  }
+
+  // Cabin bookings summary
+  const allCabin = (data.cabinBookings ?? []).sort((a, b) => a.weekNumber - b.weekNumber || a.startDay - b.startDay);
+  if (allCabin.length > 0) {
+    lines.push(`<div style="margin-top:24px;page-break-inside:avoid"><h2 style="font-size:14px;font-weight:700;margin:0 0 8px">Cabin Bookings</h2>`);
+    lines.push(`<table style="width:100%;border-collapse:collapse;border:1px solid #d1d5db;font-size:10px">`);
+    lines.push(`<tr><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Week</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Check-in</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Check-out</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Nights</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Notes</th></tr>`);
+    for (const b of allCabin) {
+      const checkIn  = DAY_LABELS[b.startDay];
+      const checkOut = DAY_LABELS[b.endDay];
+      const nights   = b.endDay - b.startDay;
+      lines.push(`<tr><td style="padding:3px 8px;border:1px solid #e5e7eb">W${b.weekNumber}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkIn}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkOut} morning</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${nights}</td><td style="padding:3px 8px;border:1px solid #e5e7eb;font-style:italic;color:#6b7280">${b.notes ? esc(b.notes) : ''}</td></tr>`);
     }
     lines.push(`</table></div>`);
   }

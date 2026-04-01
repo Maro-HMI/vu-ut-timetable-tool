@@ -2,6 +2,10 @@ export const TRAVEL_ID = '__travel__';
 export const TRAVEL_COLOR = '#94a3b8';
 export const TRAVEL_NAME = 'Travel';
 
+export const CABIN_ID    = '__cabin__';
+export const CABIN_COLOR = '#94a3b8'; // same as TRAVEL_COLOR
+export const CABIN_NAME  = 'Cabins';
+
 export type Location = 'VU' | 'UT';
 
 export interface Module {
@@ -31,9 +35,18 @@ export interface TimeBlock {
   atTwente?: boolean; // VU blocks only: student is attending at UT campus
 }
 
+export interface CabinBooking {
+  id: string;
+  weekNumber: number;
+  startDay: number; // 0=Mon … 4=Fri
+  endDay: number;
+  notes?: string;
+}
+
 export interface AppData {
   module: Module | null;
   courses: Course[];
   timeBlocks: TimeBlock[];
   dayNotes?: Record<string, string>; // key: "${location}-w${weekNumber}-d${dayOfWeek}"
+  cabinBookings?: CabinBooking[];
 }
