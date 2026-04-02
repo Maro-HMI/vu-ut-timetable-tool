@@ -166,7 +166,7 @@ function ModuleDialog({
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Number of Weeks</Label>
-              <Input type="number" min={1} max={52} value={numWeeks} onChange={e => setNumWeeks(Number(e.target.value))} className="h-8 text-sm" />
+              <Input type="number" min={1} max={52} value={numWeeks} onChange={e => setNumWeeks(Number(e.target.value))} onFocus={e => e.target.select()} className="h-8 text-sm" />
             </div>
           </div>
           {onClearData && (
@@ -257,6 +257,7 @@ export default function Planner() {
   const cabinResizeStateRef   = useRef<typeof cabinResizeState>(null);
   const weekSectionRefs       = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollContainerRef    = useRef<HTMLDivElement>(null);
+  const vuUtHeaderRef         = useRef<HTMLDivElement>(null);
 
   useEffect(() => { dragStateRef.current = dragState; },             [dragState]);
   useEffect(() => { activeCourseRef.current = activeCourseId; },     [activeCourseId]);
@@ -649,12 +650,23 @@ export default function Planner() {
   const linkBlocks = useCallback((targetId: string) => {
     if (!syncMode) return;
     const groupId = uid();
-    update(prev => ({
-      ...prev,
-      timeBlocks: prev.timeBlocks.map(b =>
-        b.id === syncMode.blockId || b.id === targetId ? { ...b, syncGroupId: groupId } : b
-      ),
-    }));
+    update(prev => {
+      const srcBlock = prev.timeBlocks.find(b => b.id === syncMode.blockId);
+      const tgtBlock = prev.timeBlocks.find(b => b.id === targetId);
+      // Collect any existing sync groups that will be broken by this new link
+      const staleGroups = new Set(
+        [srcBlock?.syncGroupId, tgtBlock?.syncGroupId].filter((g): g is string => !!g)
+      );
+      return {
+        ...prev,
+        timeBlocks: prev.timeBlocks.map(b => {
+          if (b.id === syncMode.blockId || b.id === targetId) return { ...b, syncGroupId: groupId };
+          // Clear orphaned partners whose group is being replaced
+          if (b.syncGroupId && staleGroups.has(b.syncGroupId)) return { ...b, syncGroupId: undefined };
+          return b;
+        }),
+      };
+    });
     setSyncMode(null);
   }, [update, syncMode]);
 
@@ -726,7 +738,7 @@ export default function Planner() {
     // getBoundingClientRect gives position relative to viewport; convert to scroll-container offset
     const elTop        = el.getBoundingClientRect().top;
     const containerTop = container.getBoundingClientRect().top;
-    const target = container.scrollTop + elTop - containerTop - 32; // 32 = VU/UT sticky header
+    const target = container.scrollTop + elTop - containerTop - 32; // 32 = sticky day-header height
     container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
   }, []);
 
@@ -811,7 +823,7 @@ export default function Planner() {
       if (e.button !== 0) return;
       if (lockedLocations.has(location)) return;
       setSelectedCabinId(null);
-      if (!activeCourseRef.current) {
+      if (!activeCourseRef.current || activeCourseRef.current === CABIN_ID) {
         setSelectedDayKey(null);
         setSelectedBlockId(null);
         return;
@@ -1170,34 +1182,41 @@ export default function Planner() {
             />
           </div>
 
-          {/* Scrollable weeks – VU/UT header lives inside so it scrolls horizontally with content */}
-          <div className="flex-1 overflow-y-auto overflow-x-auto" ref={scrollContainerRef}>
-            <div className="min-w-[700px]">
-              {/* VU / UT header row – sticky vertically, scrolls with content horizontally */}
-              <div className="sticky top-0 z-30 border-b bg-card flex h-8">
-                <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
-                <div className="flex-1 flex items-center justify-center gap-2">
-                  <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
-                  <button
-                    title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
-                    onClick={e => { e.stopPropagation(); toggleLock('VU'); }}
-                    className={cn('p-0.5 rounded transition-colors', lockedLocations.has('VU') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
-                  >
-                    {lockedLocations.has('VU') ? <FiLock size={13} /> : <FiUnlock size={13} />}
-                  </button>
-                </div>
-                <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
-                <div className="flex-1 flex items-center justify-center gap-2">
-                  <span className="text-xs font-bold tracking-wider">UTwente</span>
-                  <button
-                    title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
-                    onClick={e => { e.stopPropagation(); toggleLock('UT'); }}
-                    className={cn('p-0.5 rounded transition-colors', lockedLocations.has('UT') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
-                  >
-                    {lockedLocations.has('UT') ? <FiLock size={13} /> : <FiUnlock size={13} />}
-                  </button>
-                </div>
+          {/* VU / UT header row – overflow hidden, scrollLeft synced with scroll container */}
+          <div ref={vuUtHeaderRef} className="flex-shrink-0 border-b bg-card z-30 h-8 overflow-hidden">
+            <div className="min-w-[700px] flex h-full">
+              <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
+              <div className="flex-1 flex items-center justify-center gap-2">
+                <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
+                <button
+                  title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
+                  onClick={e => { e.stopPropagation(); toggleLock('VU'); }}
+                  className={cn('p-0.5 rounded transition-colors', lockedLocations.has('VU') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
+                >
+                  {lockedLocations.has('VU') ? <FiLock size={13} /> : <FiUnlock size={13} />}
+                </button>
               </div>
+              <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
+              <div className="flex-1 flex items-center justify-center gap-2">
+                <span className="text-xs font-bold tracking-wider">UTwente</span>
+                <button
+                  title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
+                  onClick={e => { e.stopPropagation(); toggleLock('UT'); }}
+                  className={cn('p-0.5 rounded transition-colors', lockedLocations.has('UT') ? 'text-amber-600' : 'text-muted-foreground hover:text-foreground')}
+                >
+                  {lockedLocations.has('UT') ? <FiLock size={13} /> : <FiUnlock size={13} />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Scrollable weeks */}
+          <div
+            className="flex-1 overflow-y-auto overflow-x-auto"
+            ref={scrollContainerRef}
+            onScroll={e => { if (vuUtHeaderRef.current) vuUtHeaderRef.current.scrollLeft = (e.currentTarget).scrollLeft; }}
+          >
+            <div className="min-w-[700px]">
               {weeks.map(week => (
                 <WeekSection
                   key={week.weekNumber} week={week}
@@ -1405,12 +1424,12 @@ function CourseItem({ id, name, color, isTravel, isCabin, isActive, isHidden, ho
         }
       </div>
       <div className="flex-1 min-w-0">
-        <span className={cn('text-xs leading-none truncate block', isHidden && 'opacity-40 line-through', isActive && 'font-medium')}
+        <span className={cn('text-[13px] leading-none truncate block', isHidden && 'opacity-40 line-through', isActive && 'font-medium')}
           onDoubleClick={e => { e.stopPropagation(); onEdit?.(); }}>
           {name}
         </span>
         {showHours && (
-          <span className="text-[9px] text-muted-foreground leading-none mt-[3px] block" style={{ fontVariantNumeric: 'tabular-nums' }}>
+          <span className="text-[10px] text-muted-foreground leading-none mt-[3px] block" style={{ fontVariantNumeric: 'tabular-nums' }}>
             <strong>VU</strong> {hoursVU ?? 0}h · <strong>UT</strong> {hoursUT ?? 0}h
           </span>
         )}
@@ -1656,10 +1675,13 @@ function WeekSection({
   const [dotHover, setDotHover]     = useState<{ label: string; x: number; y: number } | null>(null);
   const vuCabinRowRef = useRef<HTMLDivElement | null>(null);
 
+  // Clear cabin hover tooltip if the hovered booking is deleted
+  useEffect(() => { setCabinHover(null); }, [cabinBookings]);
+
   return (
     <div className="border-b-2" ref={el => onRegisterRef(week.weekNumber, el)}>
       {/* Sticky week header */}
-      <div className="sticky top-8 z-20 bg-white">
+      <div className="sticky top-0 z-20 bg-white">
         {/* Day labels row */}
         <div className="flex">
           {/* Time axis slot */}
@@ -1725,7 +1747,7 @@ function WeekSection({
           {/* Time axis – cabin icon */}
           <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }}
             className="flex-shrink-0 border-r bg-slate-100 flex items-center justify-center">
-            <FiHome size={8} className="text-muted-foreground/60" />
+            <FiHome size={11} className="text-muted-foreground/60" />
           </div>
           {/* VU cabin cells */}
           <div
@@ -1740,7 +1762,7 @@ function WeekSection({
                   className={cn('flex-1 transition-colors', di > 0 && 'border-l',
                     cabinActive ? 'cursor-crosshair bg-slate-200/60 hover:bg-slate-300/70' :
                     (coveringBooking && !lockedLocations.has('VU')) ? 'cursor-pointer' : '')}
-                  onMouseDown={e => { e.stopPropagation(); onCabinMouseDown(week.weekNumber, di); }}
+                  onMouseDown={e => { e.stopPropagation(); e.preventDefault(); onCabinMouseDown(week.weekNumber, di); }}
                   onMouseEnter={() => onCabinMouseEnter(week.weekNumber, di)}
                   onClick={e => {
                     if (coveringBooking && !lockedLocations.has('VU')) {
@@ -1880,10 +1902,12 @@ function WeekSection({
                         onClick={e => { e.stopPropagation(); onScrollToWeek(w.weekNumber); }}
                         onMouseMove={e => setDotHover({ label: `W${w.weekNumber}`, x: e.clientX, y: e.clientY })}
                         onMouseLeave={() => setDotHover(null)}
-                        className={cn('relative flex items-center justify-center transition-all duration-150 flex-shrink-0', !isActive && 'hover:scale-[2]')}
-                        style={{ width: isActive ? 9 : 5, height: isActive ? 9 : 5 }}
+                        className={cn('relative flex items-center justify-center flex-shrink-0 group/dot')}
+                        style={{ width: isActive ? 9 : 10, height: isActive ? 9 : 10 }}
                       >
-                        <span className="absolute inset-0 rounded-full" style={{
+                        <span className={cn('rounded-full transition-transform duration-150', !isActive && 'group-hover/dot:scale-[2]')} style={{
+                          width: isActive ? 9 : 5,
+                          height: isActive ? 9 : 5,
                           backgroundColor: isActive ? '#475569' : '#94a3b8',
                           opacity: isActive ? 1 : 0.55,
                         }} />
