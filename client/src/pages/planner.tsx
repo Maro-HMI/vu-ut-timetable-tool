@@ -723,7 +723,11 @@ export default function Planner() {
     const el = weekSectionRefs.current.get(weekNumber);
     const container = scrollContainerRef.current;
     if (!el || !container) return;
-    container.scrollTo({ top: el.offsetTop - 32, behavior: 'smooth' });
+    // getBoundingClientRect gives position relative to viewport; convert to scroll-container offset
+    const elTop        = el.getBoundingClientRect().top;
+    const containerTop = container.getBoundingClientRect().top;
+    const target = container.scrollTop + elTop - containerTop - 32; // 32 = VU/UT sticky header
+    container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
   }, []);
 
   const toggleLock = useCallback((loc: Location) => {
@@ -1295,8 +1299,22 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
             <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Activate a course</strong>, then <strong>drag</strong> on a day column to create a time block.</li>
               <li><strong>Click</strong> an existing block to select it — edit week, day, start/end time in the sidebar.</li>
-              <li><strong>Drag</strong> a selected block to move it.</li>
+              <li><strong>Drag</strong> a selected block to move it to another time or day.</li>
+              <li>Drag the <strong>top or bottom edge</strong> of a selected block to resize it.</li>
+              <li>Add a <strong>location</strong> or <strong>notes</strong> per block in the sidebar.</li>
               <li>Use <strong>Delete entry</strong> in the sidebar to remove a block.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Cabin bookings</h3>
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
+              <li><strong>Cabins</strong> is a built-in category in the General section for tracking overnight stays near UT.</li>
+              <li>Activate <strong>Cabins</strong>, then <strong>drag</strong> across days in the narrow cabin strip (below the day headers) to create a booking. The strip is highlighted with a border when active.</li>
+              <li><strong>Click</strong> an existing booking bar (or anywhere in its day cells) to select it.</li>
+              <li>Drag the <strong>left or right edge</strong> of a selected booking to resize it — it snaps to day borders.</li>
+              <li>Add notes to a booking in the sidebar; notes appear as a cursor-following tooltip on hover.</li>
+              <li>Check-in and check-out days, night count, and notes are included in the PDF export.</li>
             </ul>
           </section>
 
@@ -1326,8 +1344,17 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
           </section>
 
           <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Week navigation</h3>
+            <ul className="text-xs space-y-1 list-disc list-outside pl-4">
+              <li>Each week's day-header row (Mon–Fri + week number) <strong>sticks to the top</strong> while scrolling through that week's grid.</li>
+              <li>Hover over the <strong>centre gap column</strong> in any week to reveal a vertical dot strip — one dot per week, with the current week's dot highlighted.</li>
+              <li>Hover a dot to see its week number; <strong>click</strong> to jump directly to that week.</li>
+            </ul>
+          </section>
+
+          <section className="space-y-1">
             <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">Locking a location</h3>
-            <p className="text-xs">Click the lock icon next to VU or UT to prevent accidental edits to that side of the calendar.</p>
+            <p className="text-xs">Click the lock icon next to VU or UT to prevent accidental edits to that side. Locked sides show no cursor on hover and ignore clicks.</p>
           </section>
 
           <section className="space-y-1">
@@ -1335,7 +1362,7 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
             <ul className="text-xs space-y-1 list-disc list-outside pl-4">
               <li><strong>Save to File</strong> — exports your timetable as a <code>.json</code> file you can share or back up.</li>
               <li><strong>Load from File</strong> — imports a previously saved <code>.json</code> file.</li>
-              <li><strong>PDF</strong> — opens a print-ready view in a new tab; use your browser's print function to save as PDF.</li>
+              <li><strong>PDF</strong> — opens a print-ready view in a new tab with equal-width day columns; use your browser's print function to save as PDF. Cabin bookings are listed at the end with check-in/out dates.</li>
               <li>Your timetable is also automatically saved in your browser's local storage.</li>
             </ul>
           </section>
@@ -1624,7 +1651,9 @@ function WeekSection({
   getCourseColor, getCourseName, onRegisterRef, allWeeks, onScrollToWeek,
 }: WeekSectionProps) {
   const cw = getISOWeek(week.startDate);
-  const [dayHover, setDayHover] = useState<{ note: string; x: number; y: number } | null>(null);
+  const [dayHover, setDayHover]     = useState<{ note: string; x: number; y: number } | null>(null);
+  const [cabinHover, setCabinHover] = useState<{ note: string; x: number; y: number } | null>(null);
+  const [dotHover, setDotHover]     = useState<{ label: string; x: number; y: number } | null>(null);
   const vuCabinRowRef = useRef<HTMLDivElement | null>(null);
 
   return (
@@ -1693,19 +1722,35 @@ function WeekSection({
 
         {/* Cabin row */}
         <div className="flex" style={{ height: CABIN_ROW_H }}>
-          {/* Time axis – clean, no icon, no bottom border */}
+          {/* Time axis – cabin icon */}
           <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }}
-            className="flex-shrink-0 border-r bg-slate-100" />
+            className="flex-shrink-0 border-r bg-slate-100 flex items-center justify-center">
+            <FiHome size={8} className="text-muted-foreground/60" />
+          </div>
           {/* VU cabin cells */}
-          <div ref={vuCabinRowRef} className="flex-1 relative border-r border-b-2 flex" style={{ height: CABIN_ROW_H }}>
-            {Array.from({ length: 5 }, (_, di) => (
-              <div key={di}
-                className={cn('flex-1 transition-colors', di > 0 && 'border-l',
-                  cabinActive ? 'cursor-crosshair bg-slate-200/60 hover:bg-slate-300/70' : '')}
-                onMouseDown={e => { e.stopPropagation(); onCabinMouseDown(week.weekNumber, di); }}
-                onMouseEnter={() => onCabinMouseEnter(week.weekNumber, di)}
-              />
-            ))}
+          <div
+            ref={vuCabinRowRef}
+            className={cn('flex-1 relative border-r border-b-2 flex', cabinActive && 'ring-1 ring-inset ring-slate-400')}
+            style={{ height: CABIN_ROW_H, boxShadow: cabinActive ? '0 0 0 1px #94a3b8, 0 0 6px 1px rgba(100,116,139,0.25)' : undefined }}
+          >
+            {Array.from({ length: 5 }, (_, di) => {
+              const coveringBooking = cabinBookings.find(b => b.startDay <= di && b.endDay > di);
+              return (
+                <div key={di}
+                  className={cn('flex-1 transition-colors', di > 0 && 'border-l',
+                    cabinActive ? 'cursor-crosshair bg-slate-200/60 hover:bg-slate-300/70' :
+                    (coveringBooking && !lockedLocations.has('VU')) ? 'cursor-pointer' : '')}
+                  onMouseDown={e => { e.stopPropagation(); onCabinMouseDown(week.weekNumber, di); }}
+                  onMouseEnter={() => onCabinMouseEnter(week.weekNumber, di)}
+                  onClick={e => {
+                    if (coveringBooking && !lockedLocations.has('VU')) {
+                      e.stopPropagation();
+                      onCabinSelect(coveringBooking.id);
+                    }
+                  }}
+                />
+              );
+            })}
             {/* Existing bookings */}
             {cabinBookings.map(b => {
               const rs = cabinResizeState?.bookingId === b.id ? cabinResizeState : null;
@@ -1715,14 +1760,17 @@ function WeekSection({
               const barLeft  = Math.min(dispLeftPct, dispRightPct);
               const barWidth = Math.max(dispRightPct - dispLeftPct, 0);
               return (
-                <div key={b.id} className="absolute inset-y-1 group/cabin"
-                  style={{ left: `${barLeft}%`, width: `${barWidth}%` }}>
+                <div key={b.id} className="absolute inset-y-0"
+                  style={{ left: `${barLeft}%`, width: `${barWidth}%`, cursor: !lockedLocations.has('VU') ? 'pointer' : undefined }}
+                  onClick={e => { e.stopPropagation(); if (!lockedLocations.has('VU')) onCabinSelect(b.id); }}
+                  onMouseMove={b.notes ? e => setCabinHover({ note: b.notes!, x: e.clientX, y: e.clientY }) : undefined}
+                  onMouseLeave={b.notes ? () => setCabinHover(null) : undefined}
+                >
+                  {/* Visual bar – inset top/bottom for aesthetics */}
                   <div
-                    className={cn('w-full h-full rounded',
-                      !lockedLocations.has('VU') && 'cursor-pointer',
+                    className={cn('absolute inset-x-0 inset-y-1 rounded',
                       isSelected ? 'ring-2 ring-slate-500 ring-offset-0' : (!lockedLocations.has('VU') && 'hover:opacity-90'))}
                     style={{ backgroundColor: CABIN_COLOR, opacity: isSelected ? 1 : 0.7 }}
-                    onClick={e => { e.stopPropagation(); if (!lockedLocations.has('VU')) onCabinSelect(b.id); }}
                   />
                   {/* Resize handles – only when selected */}
                   {isSelected && (
@@ -1742,12 +1790,6 @@ function WeekSection({
                         <div className="w-0.5 h-3/4 rounded-full bg-white/80" />
                       </div>
                     </>
-                  )}
-                  {/* Notes hover tooltip */}
-                  {b.notes && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-popover border rounded shadow-md px-2 py-1 text-[10px] whitespace-pre-wrap max-w-[160px] pointer-events-none opacity-0 group-hover/cabin:opacity-100 transition-opacity z-50">
-                      {b.notes}
-                    </div>
                   )}
                 </div>
               );
@@ -1822,29 +1864,30 @@ function WeekSection({
         {/* Gap column – week nav dots */}
         {(() => {
           const n = allWeeks.length;
-          const dotGap = n > 1 ? Math.min(18, Math.max(4, Math.floor((GRID_HEIGHT - 16) / Math.max(n - 1, 1)))) : 0;
+          const dotGap = n > 1 ? Math.min(14, Math.max(3, Math.floor((GRID_HEIGHT - 16) / Math.max(n - 1, 1)))) : 0;
           return (
             <div
               style={{ width: GAP_W, minWidth: GAP_W, height: GRID_HEIGHT }}
-              className="flex-shrink-0 border-r bg-white flex flex-col items-center justify-center"
+              className="group/gapcol flex-shrink-0 border-r bg-white flex flex-col items-center justify-center"
             >
               {n > 1 && (
-                <div className="flex flex-col items-center" style={{ gap: dotGap }}>
+                <div className="flex flex-col items-center opacity-[0.15] group-hover/gapcol:opacity-100 transition-opacity duration-200" style={{ gap: dotGap }}>
                   {allWeeks.map(w => {
                     const isActive = w.weekNumber === week.weekNumber;
                     return (
                       <button
                         key={w.weekNumber}
-                        title={`Go to week ${w.weekNumber}`}
                         onClick={e => { e.stopPropagation(); onScrollToWeek(w.weekNumber); }}
-                        className="rounded-full transition-all duration-150 hover:scale-125 flex-shrink-0"
-                        style={{
-                          width: isActive ? 8 : 5,
-                          height: isActive ? 8 : 5,
+                        onMouseMove={e => setDotHover({ label: `W${w.weekNumber}`, x: e.clientX, y: e.clientY })}
+                        onMouseLeave={() => setDotHover(null)}
+                        className={cn('relative flex items-center justify-center transition-all duration-150 flex-shrink-0', !isActive && 'hover:scale-[2]')}
+                        style={{ width: isActive ? 9 : 5, height: isActive ? 9 : 5 }}
+                      >
+                        <span className="absolute inset-0 rounded-full" style={{
                           backgroundColor: isActive ? '#475569' : '#94a3b8',
                           opacity: isActive ? 1 : 0.55,
-                        }}
-                      />
+                        }} />
+                      </button>
                     );
                   })}
                 </div>
@@ -1870,6 +1913,36 @@ function WeekSection({
         </div>
       </div>
 
+      {/* Week-dot cursor-following label */}
+      {dotHover && (() => {
+        const PAD = 12, POP_W = 60;
+        const flipX = dotHover.x + PAD + POP_W > window.innerWidth;
+        const flipY = dotHover.y + PAD + 40 > window.innerHeight;
+        const x = flipX ? dotHover.x - PAD : dotHover.x + PAD;
+        const y = flipY ? dotHover.y - PAD : dotHover.y + PAD;
+        const transform = `${flipX ? 'translateX(-100%)' : ''} ${flipY ? 'translateY(-100%)' : ''}`.trim() || undefined;
+        return (
+          <div className="fixed z-[9998] bg-popover text-popover-foreground border rounded-md shadow-md px-2.5 py-1.5 text-xs pointer-events-none"
+            style={{ left: x, top: y, transform }}>
+            {dotHover.label}
+          </div>
+        );
+      })()}
+      {/* Cabin-note cursor-following popup */}
+      {cabinHover && (() => {
+        const PAD = 12, POP_W = 200;
+        const flipX = cabinHover.x + PAD + POP_W > window.innerWidth;
+        const flipY = cabinHover.y + PAD + 60 > window.innerHeight;
+        const x = flipX ? cabinHover.x - PAD : cabinHover.x + PAD;
+        const y = flipY ? cabinHover.y - PAD : cabinHover.y + PAD;
+        const transform = `${flipX ? 'translateX(-100%)' : ''} ${flipY ? 'translateY(-100%)' : ''}`.trim() || undefined;
+        return (
+          <div className="fixed z-[9998] bg-popover text-popover-foreground border rounded-md shadow-md px-2.5 py-1.5 text-xs pointer-events-none max-w-[200px]"
+            style={{ left: x, top: y, transform }}>
+            <p className="whitespace-pre-wrap">{cabinHover.note}</p>
+          </div>
+        );
+      })()}
       {/* Day-note cursor-following popup */}
       {dayHover && (() => {
         const PAD = 12;
@@ -2196,10 +2269,10 @@ h1{font-size:18px;font-weight:700;margin:0 0 20px}
 .week{margin-bottom:24px;page-break-inside:avoid;break-inside:avoid}
 .wk-hdr{display:flex;align-items:center;gap:8px;padding:5px 10px;background:#f3f4f6;border:1px solid #d1d5db;border-bottom:none;border-radius:4px 4px 0 0;font-size:11px}
 .wk-num{font-weight:700}.wk-cw{color:#6b7280}.wk-dates{color:#374151;flex:1;text-align:right}
-table{width:100%;border-collapse:collapse;border:1px solid #d1d5db}
-th{background:#f9fafb;font-size:9px;font-weight:600;padding:4px 5px;border:1px solid #d1d5db;text-align:left}
-td{border:1px solid #e5e7eb;padding:3px 4px;vertical-align:top;min-height:36px}
-.loc{font-weight:700;font-size:10px;color:#374151;background:#f9fafb;text-align:center;white-space:nowrap;width:28px}
+table{width:100%;border-collapse:collapse;border:1px solid #d1d5db;table-layout:fixed}
+th{background:#f9fafb;font-size:9px;font-weight:600;padding:4px 5px;border:1px solid #d1d5db;text-align:left;overflow:hidden}
+td{border:1px solid #e5e7eb;padding:3px 4px;vertical-align:top;min-height:36px;overflow:hidden}
+.loc{font-weight:700;font-size:10px;color:#374151;background:#f9fafb;text-align:center;white-space:nowrap;width:32px}
 .blk{display:block;border-radius:3px;padding:2px 4px;margin:1px 0;font-size:8.5px;font-weight:600;box-sizing:border-box;border-left-width:3px;border-left-style:solid}
 .blk-time{font-size:8px;font-weight:400;opacity:0.75}
 .blk-note{font-size:8px;font-style:italic;opacity:0.8;display:block}
@@ -2215,7 +2288,7 @@ td{border:1px solid #e5e7eb;padding:3px 4px;vertical-align:top;min-height:36px}
 
     lines.push(`<div class="week">`);
     lines.push(`<div class="wk-hdr"><span class="wk-num">Week ${week.weekNumber}</span><span class="wk-cw">CW${cw}</span><span class="wk-dates">${startStr} – ${endStr}</span></div>`);
-    lines.push(`<table><tr><th></th>`);
+    lines.push(`<table><colgroup><col style="width:32px">${Array(5).fill('<col style="width:calc((100% - 32px)/5)">').join('')}</colgroup><tr><th></th>`);
     for (let d = 0; d < 5; d++) {
       lines.push(`<th>${DAY_LABELS[d]}<br><span style="font-weight:400;color:#6b7280">${formatMonthDate(week.days[d])}</span></th>`);
     }
@@ -2254,10 +2327,15 @@ td{border:1px solid #e5e7eb;padding:3px 4px;vertical-align:top;min-height:36px}
     lines.push(`<table style="width:100%;border-collapse:collapse;border:1px solid #d1d5db;font-size:10px">`);
     lines.push(`<tr><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Week</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Check-in</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Check-out</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Nights</th><th style="background:#f9fafb;padding:4px 8px;border:1px solid #d1d5db;text-align:left">Notes</th></tr>`);
     for (const b of allCabin) {
-      const checkIn  = DAY_LABELS[b.startDay];
-      const checkOut = DAY_LABELS[b.endDay];
-      const nights   = b.endDay - b.startDay;
-      lines.push(`<tr><td style="padding:3px 8px;border:1px solid #e5e7eb">W${b.weekNumber}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkIn}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkOut} morning</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${nights}</td><td style="padding:3px 8px;border:1px solid #e5e7eb;font-style:italic;color:#6b7280">${b.notes ? esc(b.notes) : ''}</td></tr>`);
+      const checkIn   = DAY_LABELS[b.startDay];
+      const checkOut  = DAY_LABELS[b.endDay];
+      const nights    = b.endDay - b.startDay;
+      const weekData  = weeks.find(w => w.weekNumber === b.weekNumber);
+      const startStr  = weekData ? formatMonthDate(weekData.startDate) : '';
+      const endStr    = weekData ? formatMonthDate(weekData.days[4]) : '';
+      const ciDate    = weekData && b.startDay < weekData.days.length ? formatMonthDate(weekData.days[b.startDay]) : '';
+      const coDate    = weekData && b.endDay   < weekData.days.length ? formatMonthDate(weekData.days[b.endDay])   : '';
+      lines.push(`<tr><td style="padding:3px 8px;border:1px solid #e5e7eb">W${b.weekNumber}<br><span style="font-weight:400;color:#6b7280;font-size:9px">${startStr}–${endStr}</span></td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkIn}${ciDate ? `<br><span style="color:#6b7280;font-size:9px">${ciDate}</span>` : ''}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${checkOut} morning${coDate ? `<br><span style="color:#6b7280;font-size:9px">${coDate}</span>` : ''}</td><td style="padding:3px 8px;border:1px solid #e5e7eb">${nights}</td><td style="padding:3px 8px;border:1px solid #e5e7eb;font-style:italic;color:#6b7280">${b.notes ? esc(b.notes) : ''}</td></tr>`);
     }
     lines.push(`</table></div>`);
   }
