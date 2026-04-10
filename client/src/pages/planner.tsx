@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { useAppData } from '@/lib/storage';
-import type { Location, TimeBlock, AppData, Module, CabinBooking } from '@/lib/types';
+import type { Location, TimeBlock, AppData, Module, CabinBooking, LocationData, CourseExportData } from '@/lib/types';
 import { TRAVEL_ID, TRAVEL_COLOR, TRAVEL_NAME, CABIN_ID, CABIN_COLOR, CABIN_NAME } from '@/lib/types';
 import { deriveWeeks, formatTime, formatMonthDate, DAY_LABELS, type Week } from '@/lib/weeks';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { cn } from '@/lib/utils';
 import {
   FiEye, FiEyeOff, FiLock, FiUnlock, FiPlus, FiTrash2, FiSettings,
-  FiDownload, FiFolder, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter, FiHelpCircle, FiHome,
+  FiDownload, FiUpload, FiFolder, FiLink2, FiX, FiCalendar, FiSend, FiEdit2, FiPrinter, FiHelpCircle, FiHome,
 } from 'react-icons/fi';
 
 /* ── Constants ─────────────────────────────────────────── */
@@ -204,7 +204,9 @@ function ModuleDialog({
 
 /* ── Main Planner ──────────────────────────────────────── */
 export default function Planner() {
-  const { data, update, exportToFile, importFromFile, reset } = useAppData();
+  const { data, update, exportToFile, importFromFile, reset,
+          exportLocationToFile, importLocationFromFile,
+          exportCourseToFile, importCourseFromFile } = useAppData();
 
   const [activeCourseId, setActiveCourseId]   = useState<string | null>(null);
   const [hiddenCourseIds, setHiddenCourseIds] = useState<Set<string>>(new Set());
@@ -238,6 +240,21 @@ export default function Planner() {
   const [cabinResizeState, setCabinResizeState] = useState<{ bookingId: string; edge: 'start' | 'end'; weekNumber: number; currentFrac: number; sectionLeft: number; sectionWidth: number } | null>(null);
   const [editCabinNotes, setEditCabinNotes]     = useState('');
 
+  const [locationImportConfirm, setLocationImportConfirm] = useState<{ data: LocationData } | null>(null);
+  const [courseImportConfirm, setCourseImportConfirm]     = useState<{ data: CourseExportData } | null>(null);
+
+  // Marquee selection
+  const [marqueeState, setMarqueeState] = useState<{
+    startX: number; startY: number; currentX: number; currentY: number;
+  } | null>(null);
+  const marqueeStateRef = useRef<typeof marqueeState>(null);
+  const suppressNextClickRef = useRef(false);
+
+  // Multi-selection
+  const [extraSelectedIds, setExtraSelectedIds] = useState<Set<string>>(new Set());
+  const [editMultiNotes, setEditMultiNotes]     = useState('');
+  const [editMultiPlace, setEditMultiPlace]     = useState('');
+
   /* Refs */
   const colRefs              = useRef<Map<string, HTMLDivElement>>(new Map());
   const dragStateRef         = useRef<DragState | null>(null);
@@ -248,6 +265,9 @@ export default function Planner() {
   const selectedBlockIdRef   = useRef<string | null>(null);
   const deleteBlockRef       = useRef<(id: string) => void>(() => {});
   const fileInputRef         = useRef<HTMLInputElement>(null);
+  const vuFileInputRef       = useRef<HTMLInputElement>(null);
+  const utFileInputRef       = useRef<HTMLInputElement>(null);
+  const courseImportInputRef = useRef<HTMLInputElement>(null);
   const clipboardRef         = useRef<TimeBlock | null>(null);
   const hoveredColumnRef     = useRef<{ location: Location; weekNumber: number; dayOfWeek: number } | null>(null);
   const lockedLocationsRef   = useRef<Set<Location>>(lockedLocations);
@@ -258,6 +278,7 @@ export default function Planner() {
   const weekSectionRefs       = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollContainerRef    = useRef<HTMLDivElement>(null);
   const vuUtHeaderRef         = useRef<HTMLDivElement>(null);
+  const allSelectedIdsRef     = useRef<Set<string>>(new Set());
 
   useEffect(() => { dragStateRef.current = dragState; },             [dragState]);
   useEffect(() => { activeCourseRef.current = activeCourseId; },     [activeCourseId]);
@@ -269,6 +290,7 @@ export default function Planner() {
   useEffect(() => { selectedCabinIdRef.current = selectedCabinId; }, [selectedCabinId]);
   useEffect(() => { cabinDragStateRef.current = cabinDragState; }, [cabinDragState]);
   useEffect(() => { cabinResizeStateRef.current = cabinResizeState; }, [cabinResizeState]);
+  useEffect(() => { marqueeStateRef.current = marqueeState; }, [marqueeState]);
 
   /* Derived */
   const weeks = useMemo(() => {
@@ -287,6 +309,40 @@ export default function Planner() {
       setEditPlace(selectedBlock.place ?? '');
     }
   }, [selectedBlockId]);
+
+  const allSelectedIds = useMemo(() => {
+    const s = new Set(extraSelectedIds);
+    if (selectedBlockId) s.add(selectedBlockId);
+    return s;
+  }, [selectedBlockId, extraSelectedIds]);
+
+  const isMultiSelect = allSelectedIds.size > 1;
+
+  // Keep a ref so keyboard handler always has the latest set
+  useEffect(() => { allSelectedIdsRef.current = allSelectedIds; }, [allSelectedIds]);
+
+  // Derive mixed-value indicators for batch edit panel
+  const multiNotesValue = useMemo(() => {
+    if (!isMultiSelect) return null;
+    const blocks = data.timeBlocks.filter(b => allSelectedIds.has(b.id));
+    const vals = blocks.map(b => b.notes ?? '');
+    return vals.every(v => v === vals[0]) ? vals[0] : null; // null = mixed
+  }, [isMultiSelect, allSelectedIds, data.timeBlocks]);
+
+  const multiPlaceValue = useMemo(() => {
+    if (!isMultiSelect) return null;
+    const blocks = data.timeBlocks.filter(b => allSelectedIds.has(b.id));
+    const vals = blocks.map(b => b.place ?? '');
+    return vals.every(v => v === vals[0]) ? vals[0] : null;
+  }, [isMultiSelect, allSelectedIds, data.timeBlocks]);
+
+  // Reset batch edit fields when multi-selection changes
+  useEffect(() => {
+    if (isMultiSelect) {
+      setEditMultiNotes(multiNotesValue ?? '');
+      setEditMultiPlace(multiPlaceValue ?? '');
+    }
+  }, [isMultiSelect, allSelectedIds.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDayKey) setEditDayNote(data.dayNotes?.[selectedDayKey] ?? '');
@@ -329,6 +385,14 @@ export default function Planner() {
   /* Document-level drag handlers */
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
+      // Update marquee
+      if (marqueeStateRef.current) {
+        const updated = { ...marqueeStateRef.current, currentX: e.clientX, currentY: e.clientY };
+        marqueeStateRef.current = updated;
+        setMarqueeState(updated);
+        return;
+      }
+
       const ds = dragStateRef.current;
       if (!ds) return;
 
@@ -368,6 +432,44 @@ export default function Planner() {
     };
 
     const onUp = () => {
+      // Commit marquee selection
+      const ms = marqueeStateRef.current;
+      if (ms) {
+        marqueeStateRef.current = null;
+        setMarqueeState(null);
+        const mx1 = Math.min(ms.startX, ms.currentX);
+        const mx2 = Math.max(ms.startX, ms.currentX);
+        const my1 = Math.min(ms.startY, ms.currentY);
+        const my2 = Math.max(ms.startY, ms.currentY);
+        // Only select if the marquee has meaningful size
+        if (mx2 - mx1 > 4 && my2 - my1 > 4) {
+          const blocks = dataRef.current.timeBlocks;
+          const matched: string[] = [];
+          for (const block of blocks) {
+            const colEl = colRefs.current.get(colKey(block.location, block.weekNumber, block.dayOfWeek));
+            if (!colEl) continue;
+            const colRect = colEl.getBoundingClientRect();
+            // Block x bounds = column bounds
+            const bx1 = colRect.left;
+            const bx2 = colRect.right;
+            // Block y bounds from time
+            const by1 = colRect.top + (block.startMinute - GRID_START) * PX_PER_MIN;
+            const by2 = colRect.top + (block.endMinute   - GRID_START) * PX_PER_MIN;
+            // Intersection check
+            if (bx2 > mx1 && bx1 < mx2 && by2 > my1 && by1 < my2) {
+              matched.push(block.id);
+            }
+          }
+          if (matched.length > 0) {
+            const [first, ...rest] = matched;
+            suppressNextClickRef.current = true;
+            setSelectedBlockId(first);
+            setExtraSelectedIds(new Set(rest));
+          }
+        }
+        return;
+      }
+
       const ds = dragStateRef.current;
       if (!ds) return;
       if (ds.type === 'create') {
@@ -490,13 +592,16 @@ export default function Planner() {
 
       if (e.key === 'Escape') {
         setSelectedBlockId(null);
+        setExtraSelectedIds(new Set());
         setSelectedDayKey(null);
         setSelectedCabinId(null);
         setActiveCourseId(null);
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockIdRef.current) {
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && allSelectedIdsRef.current.size > 0) {
         e.preventDefault();
-        deleteBlockRef.current(selectedBlockIdRef.current);
+        const ids = new Set(allSelectedIdsRef.current);
+        ids.forEach(id => deleteBlockRef.current(id));
         setSelectedBlockId(null);
+        setExtraSelectedIds(new Set());
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedCabinIdRef.current) {
         e.preventDefault();
         deleteCabinRef.current(selectedCabinIdRef.current);
@@ -592,6 +697,7 @@ export default function Planner() {
   const handleSelectDay = useCallback((key: string) => {
     setSelectedDayKey(key);
     setSelectedBlockId(null);
+    setExtraSelectedIds(new Set());
   }, []);
 
   const saveBlockNotes = useCallback(() => {
@@ -723,6 +829,7 @@ export default function Planner() {
   const handleCabinSelect = useCallback((id: string) => {
     setSelectedCabinId(id);
     setSelectedBlockId(null);
+    setExtraSelectedIds(new Set());
     setSelectedDayKey(null);
   }, []);
 
@@ -800,6 +907,168 @@ export default function Planner() {
     });
   }, [update]);
 
+  const handleLocationImport = useCallback(async (file: File) => {
+    try {
+      const imported = await importLocationFromFile(file);
+      setLocationImportConfirm({ data: imported });
+    } catch (e) {
+      alert('Could not load file: ' + (e as Error).message);
+    }
+  }, [importLocationFromFile]);
+
+  const confirmLocationImport = useCallback(() => {
+    if (!locationImportConfirm) return;
+    const { location, courses: importedCourses, timeBlocks, dayNotes, cabinBookings } = locationImportConfirm.data;
+    const prefix = `${location}-`;
+    update(prev => {
+      // Build course id remapping: match imported courses to existing ones by name
+      const idMap = new Map<string, string>(); // importedId -> finalId
+      const coursesToAdd: typeof importedCourses = [];
+      for (const ic of importedCourses) {
+        const existing = prev.courses.find(c => c.name.trim().toLowerCase() === ic.name.trim().toLowerCase());
+        if (existing) {
+          idMap.set(ic.id, existing.id);
+        } else {
+          // Use a new stable id so we don't collide
+          const newId = uid();
+          idMap.set(ic.id, newId);
+          coursesToAdd.push({ ...ic, id: newId });
+        }
+      }
+
+      // Remap courseIds and clear syncGroupIds on imported blocks
+      const remappedBlocks = timeBlocks.map(b => ({
+        ...b,
+        courseId: idMap.get(b.courseId) ?? b.courseId,
+        syncGroupId: undefined,
+      }));
+
+      // Remove existing blocks for this location, clear sync on remaining
+      const keptBlocks = prev.timeBlocks
+        .filter(b => b.location !== location)
+        .map(b => ({ ...b, syncGroupId: undefined }));
+
+      // Merge courses (add new ones not already present)
+      const mergedCourses = [...prev.courses, ...coursesToAdd];
+
+      // Merge day notes
+      const keptNotes = Object.fromEntries(
+        Object.entries(prev.dayNotes ?? {}).filter(([k]) => !k.startsWith(prefix))
+      );
+      const newNotes = { ...keptNotes, ...dayNotes };
+
+      const newCabins = location === 'VU'
+        ? (cabinBookings ?? [])
+        : (prev.cabinBookings ?? []);
+
+      return {
+        ...prev,
+        courses: mergedCourses,
+        timeBlocks: [...keptBlocks, ...remappedBlocks],
+        dayNotes: newNotes,
+        cabinBookings: newCabins,
+      };
+    });
+    setLocationImportConfirm(null);
+  }, [locationImportConfirm, update]);
+
+  const handleCourseImport = useCallback(async (file: File) => {
+    try {
+      const imported = await importCourseFromFile(file);
+      setCourseImportConfirm({ data: imported });
+    } catch (e) {
+      alert('Could not load file: ' + (e as Error).message);
+    }
+  }, [importCourseFromFile]);
+
+  const confirmCourseImport = useCallback(() => {
+    if (!courseImportConfirm) return;
+    const { course, timeBlocks } = courseImportConfirm.data;
+    // Clear syncGroupIds from imported blocks
+    const cleanedBlocks = timeBlocks.map(b => ({ ...b, syncGroupId: undefined }));
+    update(prev => {
+      // Update or add course
+      const courseExists = prev.courses.some(c => c.id === course.id);
+      const newCourses = courseExists
+        ? prev.courses.map(c => c.id === course.id ? { ...c, name: course.name, color: course.color } : c)
+        : [...prev.courses, course];
+      // Remove existing blocks for this course, clear syncGroupIds on blocks that were linked to them
+      const removedIds = new Set(prev.timeBlocks.filter(b => b.courseId === course.id).map(b => b.id));
+      const removedSyncGroups = new Set(
+        prev.timeBlocks
+          .filter(b => b.courseId === course.id && b.syncGroupId)
+          .map(b => b.syncGroupId as string)
+      );
+      const keptBlocks = prev.timeBlocks
+        .filter(b => b.courseId !== course.id)
+        .map(b => removedSyncGroups.has(b.syncGroupId ?? '') ? { ...b, syncGroupId: undefined } : b);
+      return { ...prev, courses: newCourses, timeBlocks: [...keptBlocks, ...cleanedBlocks] };
+    });
+    setCourseImportConfirm(null);
+    setEditingCourseId(null);
+    setAddingCourse(false);
+  }, [courseImportConfirm, update]);
+
+  const saveMultiNotes = useCallback(() => {
+    const ids = allSelectedIds;
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        ids.has(b.id) ? { ...b, notes: editMultiNotes.trim() || undefined } : b
+      ),
+    }));
+  }, [update, allSelectedIds, editMultiNotes]);
+
+  const clearMultiNotes = useCallback(() => {
+    setEditMultiNotes('');
+    const ids = allSelectedIds;
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        ids.has(b.id) ? { ...b, notes: undefined } : b
+      ),
+    }));
+  }, [update, allSelectedIds]);
+
+  const saveMultiPlace = useCallback(() => {
+    const ids = allSelectedIds;
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        ids.has(b.id) ? { ...b, place: editMultiPlace.trim() || undefined } : b
+      ),
+    }));
+  }, [update, allSelectedIds, editMultiPlace]);
+
+  const clearMultiPlace = useCallback(() => {
+    setEditMultiPlace('');
+    const ids = allSelectedIds;
+    update(prev => ({
+      ...prev,
+      timeBlocks: prev.timeBlocks.map(b =>
+        ids.has(b.id) ? { ...b, place: undefined } : b
+      ),
+    }));
+  }, [update, allSelectedIds]);
+
+  const deleteAllSelected = useCallback(() => {
+    const ids = new Set(allSelectedIds);
+    update(prev => {
+      // Collect syncGroupIds to clean up
+      const removedSyncGroups = new Set(
+        prev.timeBlocks
+          .filter(b => ids.has(b.id) && b.syncGroupId)
+          .map(b => b.syncGroupId as string)
+      );
+      const blocks = prev.timeBlocks
+        .filter(b => !ids.has(b.id))
+        .map(b => removedSyncGroups.has(b.syncGroupId ?? '') ? { ...b, syncGroupId: undefined } : b);
+      return { ...prev, timeBlocks: blocks };
+    });
+    setSelectedBlockId(null);
+    setExtraSelectedIds(new Set());
+  }, [update, allSelectedIds]);
+
   function getCourseColor(courseId: string): string {
     if (courseId === TRAVEL_ID) return TRAVEL_COLOR;
     return data.courses.find(c => c.id === courseId)?.color ?? '#888';
@@ -824,8 +1093,13 @@ export default function Planner() {
       if (lockedLocations.has(location)) return;
       setSelectedCabinId(null);
       if (!activeCourseRef.current || activeCourseRef.current === CABIN_ID) {
+        // Start marquee selection
         setSelectedDayKey(null);
         setSelectedBlockId(null);
+        setExtraSelectedIds(new Set());
+        const ms = { startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY };
+        marqueeStateRef.current = ms;
+        setMarqueeState(ms);
         return;
       }
       const colEl = colRefs.current.get(colKey(location, weekNumber, dayOfWeek));
@@ -849,6 +1123,10 @@ export default function Planner() {
         }
         return;
       }
+      // Shift+click: prevent drag, selection is handled in onClick
+      if (e.shiftKey) return;
+      // Normal click: clear multi-selection, select this block
+      setExtraSelectedIds(new Set());
       setSelectedBlockId(block.id);
       setSelectedDayKey(null);
       const key = colKey(block.location, block.weekNumber, block.dayOfWeek);
@@ -863,7 +1141,7 @@ export default function Planner() {
         offsetMin: clickMin - block.startMinute,
       });
     },
-    [lockedLocations, syncMode, linkBlocks]
+    [lockedLocations, syncMode, linkBlocks, selectedBlockId]
   );
 
   const handleResizeMouseDown = useCallback(
@@ -911,7 +1189,7 @@ export default function Planner() {
           </div>
         </div>
         <input ref={fileInputRef} type="file" accept=".json" className="hidden"
-          onChange={async e => { const f = e.target.files?.[0]; if (f) { await importFromFile(f); e.target.value = ''; } }}
+          onChange={async e => { const f = e.target.files?.[0]; if (f) { try { await importFromFile(f); } catch (err) { alert('Could not load file: ' + (err as Error).message); } e.target.value = ''; } }}
         />
         <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
         <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
@@ -990,6 +1268,14 @@ export default function Planner() {
                     <Button size="sm" className="h-6 text-[10px] flex-1" onClick={handleSaveCourseEdit}>Save</Button>
                     <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => setEditingCourseId(null)}>Cancel</Button>
                   </div>
+                  <div className="flex gap-2 pt-1 border-t border-border/40">
+                    <button onClick={() => exportCourseToFile(data, course.id)} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                      <FiDownload size={10} /> Export
+                    </button>
+                    <button onClick={() => courseImportInputRef.current?.click()} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                      <FiUpload size={10} /> Import
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div
@@ -1044,6 +1330,11 @@ export default function Planner() {
                   <Button size="sm" className="h-6 text-[10px] flex-1" onClick={handleAddCourse} disabled={!newCourseName.trim()}>Add</Button>
                   <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setAddingCourse(false); setNewCourseName(''); }}>Cancel</Button>
                 </div>
+                <div className="flex gap-2 pt-1 border-t border-border/40">
+                  <button onClick={() => courseImportInputRef.current?.click()} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                    <FiUpload size={10} /> Import course
+                  </button>
+                </div>
               </div>
             ) : (
               <button onClick={() => { setAddingCourse(true); setNewCourseColor(COURSE_COLORS[data.courses.length % COURSE_COLORS.length]); }}
@@ -1068,15 +1359,68 @@ export default function Planner() {
                 Active: {getCourseName(activeCourseId)} — drag to create
               </p>
             )}
+            {/* Hidden input for course import – shared by edit and add forms */}
+            <input ref={courseImportInputRef} type="file" accept=".json" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) { handleCourseImport(f); e.target.value = ''; } }}
+            />
           </div>
 
           {/* Divider + block details */}
           <div className="border-t mx-2 mt-1 flex-shrink-0" />
           <div className="flex-1 overflow-y-auto px-2 pb-2">
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mt-2 mb-1">
-              Current Block
+              {isMultiSelect ? 'Selection' : 'Current Block'}
             </p>
-            {selectedCabinId && (() => {
+
+            {/* ── Multi-select panel ── */}
+            {isMultiSelect && (
+              <div className="space-y-2 pt-0.5" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold">{allSelectedIds.size} blocks selected</span>
+                  <button
+                    onClick={() => { setSelectedBlockId(null); setExtraSelectedIds(new Set()); }}
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  >Clear</button>
+                </div>
+                {/* Batch place */}
+                <div className="space-y-0.5">
+                  <Label className="text-[10px]">Location</Label>
+                  <Input
+                    value={editMultiPlace}
+                    onChange={e => setEditMultiPlace(e.target.value)}
+                    onBlur={saveMultiPlace}
+                    placeholder={multiPlaceValue === null ? '(multiple values)' : 'e.g. NU-3A22'}
+                    className="h-7 text-xs"
+                  />
+                </div>
+                {/* Batch notes */}
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Notes</Label>
+                  <Textarea
+                    value={editMultiNotes}
+                    onChange={e => setEditMultiNotes(e.target.value)}
+                    placeholder={multiNotesValue === null ? '(multiple values)' : 'Add notes…'}
+                    className="text-xs min-h-[48px] resize-none"
+                    rows={2}
+                  />
+                  <div className="flex gap-1.5" style={{ marginTop: '0.5rem' }}>
+                    <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={saveMultiNotes}>Apply to all</Button>
+                    <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={clearMultiNotes}>Clear all</Button>
+                  </div>
+                </div>
+                <Button
+                  variant="outline" size="sm"
+                  className="w-full h-7 text-[10px] text-red-600/80 border-red-200 hover:bg-red-50 hover:border-red-300"
+                  style={{ marginTop: '1.5rem' }}
+                  onClick={deleteAllSelected}
+                >
+                  <FiTrash2 size={12} className="mr-1" /> Delete {allSelectedIds.size} entries
+                </Button>
+              </div>
+            )}
+
+            {/* ── Single-block / cabin / day panels ── */}
+            {!isMultiSelect && selectedCabinId && (() => {
               const booking = (data.cabinBookings ?? []).find(b => b.id === selectedCabinId);
               if (!booking) return null;
               const night = booking.endDay - booking.startDay;
@@ -1111,7 +1455,7 @@ export default function Planner() {
                 </div>
               );
             })()}
-            {!selectedCabinId && selectedBlock ? (
+            {!isMultiSelect && !selectedCabinId && selectedBlock ? (
               <BlockDetails
                 block={selectedBlock}
                 courseColor={getCourseColor(selectedBlock.courseId)}
@@ -1129,14 +1473,14 @@ export default function Planner() {
                 onUpdatePosition={updateBlockPosition}
                 onToggleAtTwente={toggleAtTwente}
                 onDelete={() => deleteBlock(selectedBlock.id)}
-                onStartSync={() => setSyncMode({ blockId: selectedBlock.id, courseId: selectedBlock.courseId, fromLocation: selectedBlock.location })}
+                onStartSync={() => { setExtraSelectedIds(new Set()); setSyncMode({ blockId: selectedBlock.id, courseId: selectedBlock.courseId, fromLocation: selectedBlock.location }); }}
                 onCancelSync={() => setSyncMode(null)}
                 onUnlink={() => unlinkBlock(selectedBlock.id)}
                 getSyncPartnerName={() =>
                   syncPairBlock ? `${syncPairBlock.location} W${syncPairBlock.weekNumber} ${DAY_LABELS[syncPairBlock.dayOfWeek]}` : ''
                 }
               />
-            ) : !selectedCabinId && selectedDayKey ? (
+            ) : !isMultiSelect && !selectedCabinId && selectedDayKey ? (
               <DayNoteEditor
                 key={selectedDayKey}
                 dayKey={selectedDayKey}
@@ -1145,7 +1489,7 @@ export default function Planner() {
                 onSaveNote={saveDayNote}
                 onClearNote={clearDayNote}
               />
-            ) : !selectedCabinId && !selectedBlock && !selectedDayKey ? (
+            ) : !isMultiSelect && !selectedCabinId && !selectedBlock && !selectedDayKey ? (
               <p className="text-[10px] text-muted-foreground text-center py-4 italic">
                 Click a calendar entry or day to see details.
               </p>
@@ -1156,7 +1500,7 @@ export default function Planner() {
         {/* ── Calendar Area ─────────────────────────────── */}
         <div
           className="flex flex-col flex-1 min-w-0"
-          onClick={() => { setSelectedBlockId(null); setSelectedDayKey(null); setSelectedCabinId(null); }}
+          onClick={() => { if (suppressNextClickRef.current) { suppressNextClickRef.current = false; return; } setSelectedBlockId(null); setExtraSelectedIds(new Set()); setSelectedDayKey(null); setSelectedCabinId(null); }}
         >
           {/* Module header row */}
           <div className="flex-shrink-0 border-b bg-card z-30 flex items-center h-8 gap-1.5 px-3">
@@ -1178,7 +1522,7 @@ export default function Planner() {
               <FiPrinter size={11} /> PDF
             </button>
             <input ref={fileInputRef} type="file" accept=".json" className="hidden"
-              onChange={async e => { const f = e.target.files?.[0]; if (f) { await importFromFile(f); e.target.value = ''; } }}
+              onChange={async e => { const f = e.target.files?.[0]; if (f) { try { await importFromFile(f); } catch (err) { alert('Could not load file: ' + (err as Error).message); } e.target.value = ''; } }}
             />
           </div>
 
@@ -1186,7 +1530,7 @@ export default function Planner() {
           <div ref={vuUtHeaderRef} className="flex-shrink-0 border-b bg-card z-30 h-8 overflow-hidden">
             <div className="min-w-[700px] flex h-full">
               <div style={{ width: TIME_AXIS_W, minWidth: TIME_AXIS_W }} className="flex-shrink-0" />
-              <div className="flex-1 flex items-center justify-center gap-2">
+              <div className="flex-1 flex items-center justify-center gap-1.5">
                 <span className="text-xs font-bold tracking-wider">VU Amsterdam</span>
                 <button
                   title={lockedLocations.has('VU') ? 'Unlock VU' : 'Lock VU'}
@@ -1195,9 +1539,18 @@ export default function Planner() {
                 >
                   {lockedLocations.has('VU') ? <FiLock size={13} /> : <FiUnlock size={13} />}
                 </button>
+                <button title="Save VU entries to file" onClick={e => { e.stopPropagation(); exportLocationToFile(data, 'VU'); }} className="p-0.5 rounded transition-colors text-muted-foreground hover:text-foreground">
+                  <FiDownload size={12} />
+                </button>
+                <button title="Load VU entries from file" onClick={e => { e.stopPropagation(); vuFileInputRef.current?.click(); }} className="p-0.5 rounded transition-colors text-muted-foreground hover:text-foreground">
+                  <FiUpload size={12} />
+                </button>
+                <input ref={vuFileInputRef} type="file" accept=".json" className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { handleLocationImport(f); e.target.value = ''; } }}
+                />
               </div>
               <div style={{ width: GAP_W, minWidth: GAP_W }} className="flex-shrink-0" />
-              <div className="flex-1 flex items-center justify-center gap-2">
+              <div className="flex-1 flex items-center justify-center gap-1.5">
                 <span className="text-xs font-bold tracking-wider">UTwente</span>
                 <button
                   title={lockedLocations.has('UT') ? 'Unlock UT' : 'Lock UT'}
@@ -1206,6 +1559,15 @@ export default function Planner() {
                 >
                   {lockedLocations.has('UT') ? <FiLock size={13} /> : <FiUnlock size={13} />}
                 </button>
+                <button title="Save UT entries to file" onClick={e => { e.stopPropagation(); exportLocationToFile(data, 'UT'); }} className="p-0.5 rounded transition-colors text-muted-foreground hover:text-foreground">
+                  <FiDownload size={12} />
+                </button>
+                <button title="Load UT entries from file" onClick={e => { e.stopPropagation(); utFileInputRef.current?.click(); }} className="p-0.5 rounded transition-colors text-muted-foreground hover:text-foreground">
+                  <FiUpload size={12} />
+                </button>
+                <input ref={utFileInputRef} type="file" accept=".json" className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { handleLocationImport(f, 'UT'); e.target.value = ''; } }}
+                />
               </div>
             </div>
           </div>
@@ -1221,7 +1583,7 @@ export default function Planner() {
                 <WeekSection
                   key={week.weekNumber} week={week}
                   getBlocks={getBlocks}
-                  selectedBlockId={selectedBlockId}
+                  selectedBlockIds={allSelectedIds}
                   syncMode={syncMode}
                   syncPairId={syncPairBlock?.id ?? null}
                   dragState={dragState}
@@ -1237,7 +1599,21 @@ export default function Planner() {
                   onColumnHover={handleColumnHover}
                   onBlockMouseDown={handleBlockMouseDown}
                   onResizeMouseDown={handleResizeMouseDown}
-                  onSelectBlock={id => { setSelectedBlockId(id); setSelectedCabinId(null); }}
+                  onSelectBlock={(id, shiftKey) => {
+                    if (shiftKey) {
+                      setExtraSelectedIds(prev => {
+                        const next = new Set(prev);
+                        if (id === selectedBlockId) return next;
+                        if (next.has(id)) next.delete(id); else next.add(id);
+                        return next;
+                      });
+                      setSelectedDayKey(null);
+                    } else {
+                      setExtraSelectedIds(new Set());
+                      setSelectedBlockId(id);
+                      setSelectedCabinId(null);
+                    }
+                  }}
                   cabinBookings={(data.cabinBookings ?? []).filter(b => b.weekNumber === week.weekNumber)}
                   cabinDragState={cabinDragState?.weekNumber === week.weekNumber ? cabinDragState : null}
                   cabinActive={activeCourseId === CABIN_ID && !lockedLocations.has('VU')}
@@ -1258,6 +1634,25 @@ export default function Planner() {
           </div>
         </div>
 
+      {/* Marquee selection overlay */}
+      {marqueeState && (() => {
+        const x = Math.min(marqueeState.startX, marqueeState.currentX);
+        const y = Math.min(marqueeState.startY, marqueeState.currentY);
+        const w = Math.abs(marqueeState.currentX - marqueeState.startX);
+        const h = Math.abs(marqueeState.currentY - marqueeState.startY);
+        return (
+          <div
+            className="fixed pointer-events-none z-[9997]"
+            style={{
+              left: x, top: y, width: w, height: h,
+              background: 'hsl(var(--primary) / 0.08)',
+              border: '1.5px solid hsl(var(--primary) / 0.5)',
+              borderRadius: 3,
+            }}
+          />
+        );
+      })()}
+
       {/* Sync banner */}
       {syncMode && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-primary text-primary-foreground text-xs px-4 py-2 rounded-full shadow-lg">
@@ -1272,6 +1667,40 @@ export default function Planner() {
       <ModuleDialog open={showModuleSetup} onSave={handleModuleSave} onCancel={() => setShowModuleSetup(false)} />
       <ModuleDialog open={showModuleSettings} initial={data.module} onSave={handleModuleSave} onCancel={() => setShowModuleSettings(false)} onClearData={data.courses.length > 0 || data.timeBlocks.length > 0 || Object.keys(data.dayNotes ?? {}).length > 0 || (data.cabinBookings?.length ?? 0) > 0 ? () => { reset(); setShowModuleSettings(false); } : undefined} />
       <HelpDialog open={showHelp} onClose={() => setShowHelp(false)} />
+
+      {/* Location import confirmation */}
+      {locationImportConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setLocationImportConfirm(null)}>
+          <div className="bg-card border rounded-lg shadow-lg p-4 max-w-sm w-full mx-4 space-y-3" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-semibold">Replace {locationImportConfirm.data.location} entries?</p>
+            <p className="text-xs text-muted-foreground">
+              All existing {locationImportConfirm.data.location} blocks and day notes will be replaced with the imported data.
+              All VU–UT sync links will be cleared to prevent broken connections.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="outline" onClick={() => setLocationImportConfirm(null)}>Cancel</Button>
+              <Button size="sm" variant="destructive" onClick={confirmLocationImport}>Replace</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Course import confirmation */}
+      {courseImportConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setCourseImportConfirm(null)}>
+          <div className="bg-card border rounded-lg shadow-lg p-4 max-w-sm w-full mx-4 space-y-3" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-semibold">Import "{courseImportConfirm.data.course.name}"?</p>
+            <p className="text-xs text-muted-foreground">
+              All existing blocks for this course will be replaced with the imported data.
+              Sync links involving this course will be cleared.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="outline" onClick={() => setCourseImportConfirm(null)}>Cancel</Button>
+              <Button size="sm" variant="destructive" onClick={confirmCourseImport}>Replace</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1627,7 +2056,7 @@ function BlockDetails({
 interface WeekSectionProps {
   week: Week;
   getBlocks: (location: Location, weekNumber: number, dayOfWeek: number) => TimeBlock[];
-  selectedBlockId: string | null;
+  selectedBlockIds: Set<string>;
   syncMode: { blockId: string; courseId: string; fromLocation: Location } | null;
   syncPairId: string | null;
   dragState: DragState | null;
@@ -1648,7 +2077,7 @@ interface WeekSectionProps {
   onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
   onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
-  onSelectBlock: (id: string) => void;
+  onSelectBlock: (id: string, shiftKey: boolean) => void;
   onCabinMouseDown: (wn: number, d: number) => void;
   onCabinMouseEnter: (wn: number, d: number) => void;
   onCabinResizeMouseDown: (e: React.MouseEvent, bookingId: string, edge: 'start' | 'end', wn: number, startFrac: number, sectionLeft: number, sectionWidth: number) => void;
@@ -1661,7 +2090,7 @@ interface WeekSectionProps {
 }
 
 function WeekSection({
-  week, getBlocks, selectedBlockId, syncMode, syncPairId,
+  week, getBlocks, selectedBlockIds, syncMode, syncPairId,
   dragState, lockedLocations, colRefs,
   dayNotes, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
   cabinBookings, cabinDragState, cabinResizeState, cabinActive, selectedCabinId,
@@ -1872,7 +2301,7 @@ function WeekSection({
           {Array.from({ length: 5 }, (_, di) => (
             <DayColumn key={di} location="VU" weekNumber={week.weekNumber} dayOfWeek={di}
               blocks={getBlocks('VU', week.weekNumber, di)}
-              selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
+              selectedBlockIds={selectedBlockIds} syncMode={syncMode} syncPairId={syncPairId}
               dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('VU')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
@@ -1925,7 +2354,7 @@ function WeekSection({
           {Array.from({ length: 5 }, (_, di) => (
             <DayColumn key={di} location="UT" weekNumber={week.weekNumber} dayOfWeek={di}
               blocks={getBlocks('UT', week.weekNumber, di)}
-              selectedBlockId={selectedBlockId} syncMode={syncMode} syncPairId={syncPairId}
+              selectedBlockIds={selectedBlockIds} syncMode={syncMode} syncPairId={syncPairId}
               dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('UT')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
@@ -2047,7 +2476,7 @@ function GridLines() {
 interface DayColumnProps {
   location: Location; weekNumber: number; dayOfWeek: number;
   blocks: TimeBlock[];
-  selectedBlockId: string | null;
+  selectedBlockIds: Set<string>;
   syncMode: { blockId: string; courseId: string; fromLocation: Location } | null;
   syncPairId: string | null;
   dragState: DragState | null;
@@ -2060,14 +2489,14 @@ interface DayColumnProps {
   onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
   onResizeMouseDown: (e: React.MouseEvent, block: TimeBlock, edge: 'top' | 'bottom') => void;
-  onSelectBlock: (id: string) => void;
+  onSelectBlock: (id: string, shiftKey: boolean) => void;
   getCourseColor: (id: string) => string;
   getCourseName: (id: string) => string;
 }
 
 function DayColumn({
   location, weekNumber, dayOfWeek, blocks,
-  selectedBlockId, syncMode, syncPairId,
+  selectedBlockIds, syncMode, syncPairId,
   dragState, locked, hasActiveCourse, activeSyncGroupId, activeSyncLocation, colRefs,
   onMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
@@ -2133,7 +2562,7 @@ function DayColumn({
         const isBeingMoved   = dragState?.type === 'move' && dragState.blockId === block.id;
         const isBeingResized = (dragState?.type === 'resize-top' || dragState?.type === 'resize-bottom') && dragState.blockId === block.id;
         const isDraggedAway  = isBeingMoved && dragState.dayOfWeek !== dayOfWeek;
-        const isSelected   = block.id === selectedBlockId;
+        const isSelected   = selectedBlockIds.has(block.id);
         const isSyncPair   = block.id === syncPairId;
         const isSyncTarget = syncMode !== null && block.courseId === syncMode.courseId &&
           block.location !== syncMode.fromLocation && !block.syncGroupId;
@@ -2185,7 +2614,7 @@ function DayColumn({
             onMouseDown={e => onBlockMouseDown(e, block)}
             onClick={e => {
               e.stopPropagation();
-              if (!locked) onSelectBlock(block.id);
+              if (!locked) onSelectBlock(block.id, e.shiftKey);
             }}
           >
             {/* At Twente inset stripe (10% width) */}
@@ -2219,8 +2648,8 @@ function DayColumn({
                 style={{ backgroundColor: color, opacity: 0.8 }}
               />
             )}
-            {/* Resize handles — only on selected, unlocked blocks */}
-            {isSelected && !locked && (
+            {/* Resize handles — only on primary selected block (not multi-selection extras) */}
+            {isSelected && selectedBlockIds.size === 1 && !locked && (
               <>
                 <div
                   className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-30"

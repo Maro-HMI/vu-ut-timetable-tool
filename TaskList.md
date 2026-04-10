@@ -1,0 +1,9 @@
+- do I need to fill in all the classes? or can I upload the excel spreadsheet?
+- the only think I miss now is to see the notes immediately, without having to move the cursor
+- Multi-edit of several blocks at the same time would also be nice and is on the to-do list; but first want to get the basics solid
+- One thing that’s still needed is a merge function to take a VU only file and merge with a UT only file
+- Load in/out individual courses
+- Setting for individual user settings (where to show notes / how)
+- Ability to load in/out clas times to the work visualizing tool
+- Day selection - mark day as unschedulable (causes a slight diagonal line crosshatch over that day – no scheduling possible when that toggle is on). If there is something scheduled (due to import of before it was marked as unschedulable) it's still possible to select it - it just prevents the creation of new entries while the toggle is on
+- Last action undo / redo

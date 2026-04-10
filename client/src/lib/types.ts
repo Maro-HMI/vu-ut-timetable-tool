@@ -50,3 +50,16 @@ export interface AppData {
   dayNotes?: Record<string, string>; // key: "${location}-w${weekNumber}-d${dayOfWeek}"
   cabinBookings?: CabinBooking[];
 }
+
+export interface LocationData {
+  location: Location;
+  courses: Course[];
+  timeBlocks: TimeBlock[];
+  dayNotes: Record<string, string>;
+  cabinBookings?: CabinBooking[];
+}
+
+export interface CourseExportData {
+  course: Course;
+  timeBlocks: TimeBlock[];
+}

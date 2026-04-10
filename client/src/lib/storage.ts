@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { AppData } from './types';
+import type { AppData, LocationData, CourseExportData } from './types';
 
 const STORAGE_KEY = 'vu-ut-timetable-v1';
 
@@ -36,6 +36,20 @@ function persist(data: AppData) {
   }
 }
 
+function triggerDownload(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function sanitizeName(name: string) {
+  return name.replace(/[^a-z0-9_-]/gi, '_');
+}
+
 export function useAppData() {
   const [data, setData] = useState<AppData>(load);
 
@@ -47,15 +61,11 @@ export function useAppData() {
     });
   }, []);
 
+  // ── Full data export/import ────────────────────────────
+
   const exportToFile = useCallback((d: AppData) => {
-    const name = (d.module?.name ?? 'timetable').replace(/[^a-z0-9_-]/gi, '_');
-    const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${name}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const name = sanitizeName(d.module?.name ?? 'timetable');
+    triggerDownload(`${name}.json`, JSON.stringify(d, null, 2));
   }, []);
 
   const importFromFile = useCallback((file: File): Promise<void> => {
@@ -63,9 +73,16 @@ export function useAppData() {
       const reader = new FileReader();
       reader.onload = e => {
         try {
-          const imported = JSON.parse(e.target?.result as string) as AppData;
-          setData(imported);
-          persist(imported);
+          const parsed = JSON.parse(e.target?.result as string) as Partial<AppData>;
+          const normalized: AppData = {
+            module: parsed.module ?? null,
+            courses: parsed.courses ?? [],
+            timeBlocks: parsed.timeBlocks ?? [],
+            dayNotes: parsed.dayNotes ?? {},
+            cabinBookings: parsed.cabinBookings ?? [],
+          };
+          setData(normalized);
+          persist(normalized);
           resolve();
         } catch {
           reject(new Error('Invalid file format'));
@@ -81,5 +98,93 @@ export function useAppData() {
     setData(defaultData);
   }, []);
 
-  return { data, update, exportToFile, importFromFile, reset };
+  // ── Location-specific export/import ───────────────────
+
+  const exportLocationToFile = useCallback((d: AppData, location: 'VU' | 'UT') => {
+    const prefix = `${location}-`;
+    const blocks = d.timeBlocks.filter(b => b.location === location);
+    const courseIds = new Set(blocks.map(b => b.courseId));
+    const locationData: LocationData = {
+      location,
+      courses: d.courses.filter(c => courseIds.has(c.id)),
+      timeBlocks: blocks,
+      dayNotes: Object.fromEntries(
+        Object.entries(d.dayNotes ?? {}).filter(([k]) => k.startsWith(prefix))
+      ),
+      cabinBookings: location === 'VU' ? (d.cabinBookings ?? []) : [],
+    };
+    const moduleName = sanitizeName(d.module?.name ?? 'timetable');
+    triggerDownload(`${moduleName}_${location}.json`, JSON.stringify(locationData, null, 2));
+  }, []);
+
+  const importLocationFromFile = useCallback((file: File): Promise<LocationData> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const parsed = JSON.parse(e.target?.result as string) as Partial<LocationData>;
+          if (!parsed.location || (parsed.location !== 'VU' && parsed.location !== 'UT')) {
+            reject(new Error('File does not appear to be a location export (missing or invalid "location" field)'));
+            return;
+          }
+          const normalized: LocationData = {
+            location: parsed.location,
+            courses: parsed.courses ?? [],
+            timeBlocks: parsed.timeBlocks ?? [],
+            dayNotes: parsed.dayNotes ?? {},
+            cabinBookings: parsed.cabinBookings ?? [],
+          };
+          resolve(normalized);
+        } catch {
+          reject(new Error('Invalid file format'));
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  }, []);
+
+  // ── Course-specific export/import ─────────────────────
+
+  const exportCourseToFile = useCallback((d: AppData, courseId: string) => {
+    const course = d.courses.find(c => c.id === courseId);
+    if (!course) return;
+    const courseData: CourseExportData = {
+      course,
+      timeBlocks: d.timeBlocks.filter(b => b.courseId === courseId),
+    };
+    const courseName = sanitizeName(course.name);
+    triggerDownload(`course_${courseName}.json`, JSON.stringify(courseData, null, 2));
+  }, []);
+
+  const importCourseFromFile = useCallback((file: File): Promise<CourseExportData> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const parsed = JSON.parse(e.target?.result as string) as Partial<CourseExportData>;
+          if (!parsed.course?.id || !parsed.course?.name) {
+            reject(new Error('File does not appear to be a course export (missing "course" field)'));
+            return;
+          }
+          const normalized: CourseExportData = {
+            course: parsed.course,
+            timeBlocks: parsed.timeBlocks ?? [],
+          };
+          resolve(normalized);
+        } catch {
+          reject(new Error('Invalid file format'));
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  }, []);
+
+  return {
+    data, update, reset,
+    exportToFile, importFromFile,
+    exportLocationToFile, importLocationFromFile,
+    exportCourseToFile, importCourseFromFile,
+  };
 }
