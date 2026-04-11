@@ -49,6 +49,7 @@ export interface AppData {
   timeBlocks: TimeBlock[];
   dayNotes?: Record<string, string>; // key: "${location}-w${weekNumber}-d${dayOfWeek}"
   cabinBookings?: CabinBooking[];
+  unschedulableDays?: Record<string, boolean>; // key: "${location}-w${weekNumber}-d${dayOfWeek}"
 }
 
 export interface LocationData {
@@ -57,6 +58,7 @@ export interface LocationData {
   timeBlocks: TimeBlock[];
   dayNotes: Record<string, string>;
   cabinBookings?: CabinBooking[];
+  unschedulableDays?: Record<string, boolean>;
 }
 
 export interface CourseExportData {

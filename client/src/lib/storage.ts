@@ -9,6 +9,7 @@ const defaultData: AppData = {
   timeBlocks: [],
   dayNotes: {},
   cabinBookings: [],
+  unschedulableDays: {},
 };
 
 function load(): AppData {
@@ -22,6 +23,7 @@ function load(): AppData {
       timeBlocks: parsed.timeBlocks ?? [],
       dayNotes: parsed.dayNotes ?? {},
       cabinBookings: parsed.cabinBookings ?? [],
+      unschedulableDays: parsed.unschedulableDays ?? {},
     };
   } catch {
     return defaultData;
@@ -80,6 +82,7 @@ export function useAppData() {
             timeBlocks: parsed.timeBlocks ?? [],
             dayNotes: parsed.dayNotes ?? {},
             cabinBookings: parsed.cabinBookings ?? [],
+            unschedulableDays: parsed.unschedulableDays ?? {},
           };
           setData(normalized);
           persist(normalized);
@@ -112,6 +115,9 @@ export function useAppData() {
         Object.entries(d.dayNotes ?? {}).filter(([k]) => k.startsWith(prefix))
       ),
       cabinBookings: location === 'VU' ? (d.cabinBookings ?? []) : [],
+      unschedulableDays: Object.fromEntries(
+        Object.entries(d.unschedulableDays ?? {}).filter(([k]) => k.startsWith(prefix))
+      ),
     };
     const moduleName = sanitizeName(d.module?.name ?? 'timetable');
     triggerDownload(`${moduleName}_${location}.json`, JSON.stringify(locationData, null, 2));
@@ -133,6 +139,7 @@ export function useAppData() {
             timeBlocks: parsed.timeBlocks ?? [],
             dayNotes: parsed.dayNotes ?? {},
             cabinBookings: parsed.cabinBookings ?? [],
+            unschedulableDays: parsed.unschedulableDays ?? {},
           };
           resolve(normalized);
         } catch {

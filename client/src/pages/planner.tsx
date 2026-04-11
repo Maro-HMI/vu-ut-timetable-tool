@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
@@ -15,6 +16,16 @@ import {
 } from 'react-icons/fi';
 
 /* ── Constants ─────────────────────────────────────────── */
+
+/* Shared selection/highlight style tokens — use these everywhere so the
+   visual language stays consistent across blocks, day headers, cabin cells, etc. */
+const SEL = {
+  ring:       'ring-2 ring-primary ring-offset-0',     // strong outset selection (time blocks)
+  ringInset:  'ring-2 ring-inset ring-primary',        // strong inset selection (day headers, grid cells)
+  ringSubtle: 'ring-1 ring-primary/30',                // soft selection (course items, cabin active)
+  bg:         'bg-primary/10',                         // tinted background on selected containers
+} as const;
+
 const GRID_START  = 480;  // 08:00 in minutes
 const GRID_END    = 1080; // 18:00 in minutes
 const HOUR_HEIGHT = 30;   // px per hour
@@ -250,10 +261,14 @@ export default function Planner() {
   const marqueeStateRef = useRef<typeof marqueeState>(null);
   const suppressNextClickRef = useRef(false);
 
-  // Multi-selection
+  // Block multi-selection
   const [extraSelectedIds, setExtraSelectedIds] = useState<Set<string>>(new Set());
   const [editMultiNotes, setEditMultiNotes]     = useState('');
   const [editMultiPlace, setEditMultiPlace]     = useState('');
+
+  // Day multi-selection
+  const [extraSelectedDayKeys, setExtraSelectedDayKeys] = useState<Set<string>>(new Set());
+  const [editMultiDayNote, setEditMultiDayNote]         = useState('');
 
   /* Refs */
   const colRefs              = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -321,6 +336,28 @@ export default function Planner() {
   // Keep a ref so keyboard handler always has the latest set
   useEffect(() => { allSelectedIdsRef.current = allSelectedIds; }, [allSelectedIds]);
 
+  const allSelectedDayKeys = useMemo(() => {
+    const s = new Set(extraSelectedDayKeys);
+    if (selectedDayKey) s.add(selectedDayKey);
+    return s;
+  }, [selectedDayKey, extraSelectedDayKeys]);
+
+  const isMultiSelectDays = allSelectedDayKeys.size > 1;
+
+  const multiDayNoteValue = useMemo(() => {
+    if (!isMultiSelectDays) return null;
+    const vals = [...allSelectedDayKeys].map(k => data.dayNotes?.[k] ?? '');
+    return vals.every(v => v === vals[0]) ? vals[0] : null;
+  }, [isMultiSelectDays, allSelectedDayKeys, data.dayNotes]);
+
+  const multiDayUnschedulable = useMemo((): boolean | null => {
+    if (!isMultiSelectDays) return null;
+    const vals = [...allSelectedDayKeys].map(k => data.unschedulableDays?.[k] ?? false);
+    if (vals.every(v => v)) return true;
+    if (vals.every(v => !v)) return false;
+    return null; // mixed
+  }, [isMultiSelectDays, allSelectedDayKeys, data.unschedulableDays]);
+
   // Derive mixed-value indicators for batch edit panel
   const multiNotesValue = useMemo(() => {
     if (!isMultiSelect) return null;
@@ -343,6 +380,10 @@ export default function Planner() {
       setEditMultiPlace(multiPlaceValue ?? '');
     }
   }, [isMultiSelect, allSelectedIds.size]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (isMultiSelectDays) setEditMultiDayNote(multiDayNoteValue ?? '');
+  }, [isMultiSelectDays, allSelectedDayKeys.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedDayKey) setEditDayNote(data.dayNotes?.[selectedDayKey] ?? '');
@@ -594,6 +635,7 @@ export default function Planner() {
         setSelectedBlockId(null);
         setExtraSelectedIds(new Set());
         setSelectedDayKey(null);
+        setExtraSelectedDayKeys(new Set());
         setSelectedCabinId(null);
         setActiveCourseId(null);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && allSelectedIdsRef.current.size > 0) {
@@ -620,7 +662,8 @@ export default function Planner() {
       } else if (mod && (e.key === 'v' || e.key === 'V')) {
         const clip = clipboardRef.current;
         const col  = hoveredColumnRef.current;
-        if (clip && col && !lockedLocationsRef.current.has(col.location)) {
+        const pasteKey = col ? `${col.location}-w${col.weekNumber}-d${col.dayOfWeek}` : '';
+        if (clip && col && !lockedLocationsRef.current.has(col.location) && !dataRef.current.unschedulableDays?.[pasteKey]) {
           const newBlock: TimeBlock = {
             ...clip,
             id: uid(),
@@ -694,11 +737,62 @@ export default function Planner() {
     });
   }, [update, selectedDayKey]);
 
-  const handleSelectDay = useCallback((key: string) => {
-    setSelectedDayKey(key);
+  const toggleUnschedulable = useCallback((key: string) => {
+    update(prev => ({
+      ...prev,
+      unschedulableDays: {
+        ...(prev.unschedulableDays ?? {}),
+        [key]: !(prev.unschedulableDays?.[key] ?? false),
+      },
+    }));
+  }, [update]);
+
+  const saveMultiDayNote = useCallback(() => {
+    const keys = allSelectedDayKeys;
+    update(prev => {
+      const dayNotes = { ...(prev.dayNotes ?? {}) };
+      for (const k of keys) {
+        if (editMultiDayNote.trim()) dayNotes[k] = editMultiDayNote;
+        else delete dayNotes[k];
+      }
+      return { ...prev, dayNotes };
+    });
+  }, [update, allSelectedDayKeys, editMultiDayNote]);
+
+  const clearMultiDayNotes = useCallback(() => {
+    setEditMultiDayNote('');
+    const keys = allSelectedDayKeys;
+    update(prev => {
+      const dayNotes = { ...(prev.dayNotes ?? {}) };
+      for (const k of keys) delete dayNotes[k];
+      return { ...prev, dayNotes };
+    });
+  }, [update, allSelectedDayKeys]);
+
+  const setMultiUnschedulable = useCallback((value: boolean) => {
+    const keys = allSelectedDayKeys;
+    update(prev => {
+      const unschedulableDays = { ...(prev.unschedulableDays ?? {}) };
+      for (const k of keys) unschedulableDays[k] = value;
+      return { ...prev, unschedulableDays };
+    });
+  }, [update, allSelectedDayKeys]);
+
+  const handleSelectDay = useCallback((key: string, shiftKey?: boolean) => {
+    if (shiftKey && selectedDayKey) {
+      setExtraSelectedDayKeys(prev => {
+        const next = new Set(prev);
+        if (key === selectedDayKey) return next;
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+      });
+    } else {
+      setSelectedDayKey(key);
+      setExtraSelectedDayKeys(new Set());
+    }
     setSelectedBlockId(null);
     setExtraSelectedIds(new Set());
-  }, []);
+  }, [selectedDayKey]);
 
   const saveBlockNotes = useCallback(() => {
     if (!selectedBlock) return;
@@ -810,6 +904,7 @@ export default function Planner() {
     setSelectedCabinId(null);
     setSelectedBlockId(null);
     setSelectedDayKey(null);
+    setExtraSelectedDayKeys(new Set());
     setCabinDragState({ weekNumber, startDay: day, currentDay: day });
   }, [activeCourseId, lockedLocations]);
 
@@ -831,6 +926,7 @@ export default function Planner() {
     setSelectedBlockId(null);
     setExtraSelectedIds(new Set());
     setSelectedDayKey(null);
+    setExtraSelectedDayKeys(new Set());
   }, []);
 
   const registerWeekRef = useCallback((weekNumber: number, el: HTMLDivElement | null) => {
@@ -918,7 +1014,7 @@ export default function Planner() {
 
   const confirmLocationImport = useCallback(() => {
     if (!locationImportConfirm) return;
-    const { location, courses: importedCourses, timeBlocks, dayNotes, cabinBookings } = locationImportConfirm.data;
+    const { location, courses: importedCourses, timeBlocks, dayNotes, cabinBookings, unschedulableDays: importedUnschedulable } = locationImportConfirm.data;
     const prefix = `${location}-`;
     update(prev => {
       // Build course id remapping: match imported courses to existing ones by name
@@ -961,12 +1057,19 @@ export default function Planner() {
         ? (cabinBookings ?? [])
         : (prev.cabinBookings ?? []);
 
+      // Merge unschedulable days
+      const keptUnschedulable = Object.fromEntries(
+        Object.entries(prev.unschedulableDays ?? {}).filter(([k]) => !k.startsWith(prefix))
+      );
+      const newUnschedulable = { ...keptUnschedulable, ...(importedUnschedulable ?? {}) };
+
       return {
         ...prev,
         courses: mergedCourses,
         timeBlocks: [...keptBlocks, ...remappedBlocks],
         dayNotes: newNotes,
         cabinBookings: newCabins,
+        unschedulableDays: newUnschedulable,
       };
     });
     setLocationImportConfirm(null);
@@ -1095,6 +1198,7 @@ export default function Planner() {
       if (!activeCourseRef.current || activeCourseRef.current === CABIN_ID) {
         // Start marquee selection
         setSelectedDayKey(null);
+        setExtraSelectedDayKeys(new Set());
         setSelectedBlockId(null);
         setExtraSelectedIds(new Set());
         const ms = { startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY };
@@ -1102,6 +1206,8 @@ export default function Planner() {
         setMarqueeState(ms);
         return;
       }
+      const dayKey = `${location}-w${weekNumber}-d${dayOfWeek}`;
+      if (dataRef.current.unschedulableDays?.[dayKey]) return;
       const colEl = colRefs.current.get(colKey(location, weekNumber, dayOfWeek));
       if (!colEl) return;
       const startMin = minFromClientY(colEl, e.clientY);
@@ -1129,6 +1235,7 @@ export default function Planner() {
       setExtraSelectedIds(new Set());
       setSelectedBlockId(block.id);
       setSelectedDayKey(null);
+      setExtraSelectedDayKeys(new Set());
       const key = colKey(block.location, block.weekNumber, block.dayOfWeek);
       const colEl = colRefs.current.get(key);
       if (!colEl) return;
@@ -1151,6 +1258,7 @@ export default function Planner() {
       if (lockedLocations.has(block.location)) return;
       setSelectedBlockId(block.id);
       setSelectedDayKey(null);
+      setExtraSelectedDayKeys(new Set());
       setDragState({
         type: edge === 'top' ? 'resize-top' : 'resize-bottom',
         blockId: block.id, location: block.location,
@@ -1369,7 +1477,7 @@ export default function Planner() {
           <div className="border-t mx-2 mt-1 flex-shrink-0" />
           <div className="flex-1 overflow-y-auto px-2 pb-2">
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 mt-2 mb-1">
-              {isMultiSelect ? 'Selection' : 'Current Block'}
+              {isMultiSelect || isMultiSelectDays ? 'Selection' : 'Current Block'}
             </p>
 
             {/* ── Multi-select panel ── */}
@@ -1419,8 +1527,23 @@ export default function Planner() {
               </div>
             )}
 
+            {/* ── Multi-day panel ── */}
+            {!isMultiSelect && isMultiSelectDays && (
+              <MultiDayPanel
+                count={allSelectedDayKeys.size}
+                noteValue={multiDayNoteValue}
+                unschedulableValue={multiDayUnschedulable}
+                editNote={editMultiDayNote}
+                onChangeNote={setEditMultiDayNote}
+                onSaveNotes={saveMultiDayNote}
+                onClearNotes={clearMultiDayNotes}
+                onSetUnschedulable={setMultiUnschedulable}
+                onClearSelection={() => { setSelectedDayKey(null); setExtraSelectedDayKeys(new Set()); }}
+              />
+            )}
+
             {/* ── Single-block / cabin / day panels ── */}
-            {!isMultiSelect && selectedCabinId && (() => {
+            {!isMultiSelect && !isMultiSelectDays && selectedCabinId && (() => {
               const booking = (data.cabinBookings ?? []).find(b => b.id === selectedCabinId);
               if (!booking) return null;
               const night = booking.endDay - booking.startDay;
@@ -1455,7 +1578,7 @@ export default function Planner() {
                 </div>
               );
             })()}
-            {!isMultiSelect && !selectedCabinId && selectedBlock ? (
+            {!isMultiSelect && !isMultiSelectDays && !selectedCabinId && selectedBlock ? (
               <BlockDetails
                 block={selectedBlock}
                 courseColor={getCourseColor(selectedBlock.courseId)}
@@ -1480,7 +1603,7 @@ export default function Planner() {
                   syncPairBlock ? `${syncPairBlock.location} W${syncPairBlock.weekNumber} ${DAY_LABELS[syncPairBlock.dayOfWeek]}` : ''
                 }
               />
-            ) : !isMultiSelect && !selectedCabinId && selectedDayKey ? (
+            ) : !isMultiSelect && !isMultiSelectDays && !selectedCabinId && selectedDayKey ? (
               <DayNoteEditor
                 key={selectedDayKey}
                 dayKey={selectedDayKey}
@@ -1488,8 +1611,10 @@ export default function Planner() {
                 onChangeNote={setEditDayNote}
                 onSaveNote={saveDayNote}
                 onClearNote={clearDayNote}
+                isUnschedulable={data.unschedulableDays?.[selectedDayKey] ?? false}
+                onToggleUnschedulable={() => toggleUnschedulable(selectedDayKey)}
               />
-            ) : !isMultiSelect && !selectedCabinId && !selectedBlock && !selectedDayKey ? (
+            ) : !isMultiSelect && !isMultiSelectDays && !selectedCabinId && !selectedBlock && !selectedDayKey ? (
               <p className="text-[10px] text-muted-foreground text-center py-4 italic">
                 Click a calendar entry or day to see details.
               </p>
@@ -1500,7 +1625,7 @@ export default function Planner() {
         {/* ── Calendar Area ─────────────────────────────── */}
         <div
           className="flex flex-col flex-1 min-w-0"
-          onClick={() => { if (suppressNextClickRef.current) { suppressNextClickRef.current = false; return; } setSelectedBlockId(null); setExtraSelectedIds(new Set()); setSelectedDayKey(null); setSelectedCabinId(null); }}
+          onClick={() => { if (suppressNextClickRef.current) { suppressNextClickRef.current = false; return; } setSelectedBlockId(null); setExtraSelectedIds(new Set()); setSelectedDayKey(null); setExtraSelectedDayKeys(new Set()); setSelectedCabinId(null); }}
         >
           {/* Module header row */}
           <div className="flex-shrink-0 border-b bg-card z-30 flex items-center h-8 gap-1.5 px-3">
@@ -1590,7 +1715,9 @@ export default function Planner() {
                   lockedLocations={lockedLocations}
                   colRefs={colRefs}
                   dayNotes={data.dayNotes ?? {}}
+                  unschedulableDays={data.unschedulableDays ?? {}}
                   selectedDayKey={selectedDayKey}
+                  allSelectedDayKeys={allSelectedDayKeys}
                   hasActiveCourse={activeCourseId !== null && activeCourseId !== CABIN_ID}
                   activeSyncGroupId={selectedBlock?.syncGroupId ?? null}
                   activeSyncLocation={selectedBlock?.location ?? null}
@@ -1608,6 +1735,7 @@ export default function Planner() {
                         return next;
                       });
                       setSelectedDayKey(null);
+                      setExtraSelectedDayKeys(new Set());
                     } else {
                       setExtraSelectedIds(new Set());
                       setSelectedBlockId(id);
@@ -1840,7 +1968,7 @@ function CourseItem({ id, name, color, isTravel, isCabin, isActive, isHidden, ho
     <div
       className={cn(
         'group flex items-start gap-1.5 px-2 py-1 rounded-md mb-0.5 cursor-pointer transition-colors select-none',
-        isActive ? 'bg-primary/10 ring-1 ring-primary/30' : 'hover:bg-muted/40'
+        isActive ? `${SEL.bg} ${SEL.ringSubtle}` : 'hover:bg-muted/40'
       )}
       onClick={onActivate}
     >
@@ -2063,7 +2191,9 @@ interface WeekSectionProps {
   lockedLocations: Set<Location>;
   colRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   dayNotes: Record<string, string>;
+  unschedulableDays: Record<string, boolean>;
   selectedDayKey: string | null;
+  allSelectedDayKeys: Set<string>;
   hasActiveCourse: boolean;
   activeSyncGroupId: string | null;
   activeSyncLocation: Location | null;
@@ -2072,7 +2202,7 @@ interface WeekSectionProps {
   cabinResizeState: { bookingId: string; edge: 'start' | 'end'; weekNumber: number; currentFrac: number; sectionLeft: number; sectionWidth: number } | null;
   cabinActive: boolean;
   selectedCabinId: string | null;
-  onSelectDay: (key: string) => void;
+  onSelectDay: (key: string, shiftKey?: boolean) => void;
   onColumnMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
   onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
@@ -2092,7 +2222,7 @@ interface WeekSectionProps {
 function WeekSection({
   week, getBlocks, selectedBlockIds, syncMode, syncPairId,
   dragState, lockedLocations, colRefs,
-  dayNotes, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
+  dayNotes, unschedulableDays, selectedDayKey, allSelectedDayKeys, onSelectDay, hasActiveCourse, activeSyncGroupId, activeSyncLocation,
   cabinBookings, cabinDragState, cabinResizeState, cabinActive, selectedCabinId,
   onColumnMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   onCabinMouseDown, onCabinMouseEnter, onCabinResizeMouseDown, onCabinSelect,
@@ -2124,14 +2254,15 @@ function WeekSection({
               return (
                 <div
                   key={di}
-                  className={cn('flex-1 text-center py-1 relative transition-colors', di > 0 && 'border-l', !vuLocked && 'cursor-pointer hover:bg-muted/20')}
-                  onClick={e => { e.stopPropagation(); if (!vuLocked) onSelectDay(dKey); }}
+                  className={cn('flex-1 text-center py-1 relative transition-colors select-none', di > 0 && 'border-l', !vuLocked && 'cursor-pointer hover:bg-muted/20', allSelectedDayKeys.has(dKey) && `${SEL.bg} ${SEL.ringInset}`)}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={e => { e.stopPropagation(); if (!vuLocked) onSelectDay(dKey, e.shiftKey); }}
                   onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
                   onMouseLeave={note ? () => setDayHover(null) : undefined}
                 >
                   {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                  <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                  <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+                  <div className={cn('text-[9px] font-medium', selectedDayKey === dKey ? 'text-primary' : 'text-muted-foreground')}>{DAY_LABELS[di]}</div>
+                  <div className={cn('text-[9px]', selectedDayKey === dKey ? 'text-primary/80' : 'text-muted-foreground')}>{formatMonthDate(day)}</div>
                 </div>
               );
             })}
@@ -2157,14 +2288,15 @@ function WeekSection({
               return (
                 <div
                   key={di}
-                  className={cn('flex-1 text-center py-1 relative transition-colors', di > 0 && 'border-l', !utLocked && 'cursor-pointer hover:bg-muted/20')}
-                  onClick={e => { e.stopPropagation(); if (!utLocked) onSelectDay(dKey); }}
+                  className={cn('flex-1 text-center py-1 relative transition-colors select-none', di > 0 && 'border-l', !utLocked && 'cursor-pointer hover:bg-muted/20', allSelectedDayKeys.has(dKey) && `${SEL.bg} ${SEL.ringInset}`)}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={e => { e.stopPropagation(); if (!utLocked) onSelectDay(dKey, e.shiftKey); }}
                   onMouseMove={note ? e => setDayHover({ note, x: e.clientX, y: e.clientY }) : undefined}
                   onMouseLeave={note ? () => setDayHover(null) : undefined}
                 >
                   {note && <div className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-blue-600" />}
-                  <div className="text-[9px] text-muted-foreground font-medium">{DAY_LABELS[di]}</div>
-                  <div className="text-[9px] text-muted-foreground">{formatMonthDate(day)}</div>
+                  <div className={cn('text-[9px] font-medium', selectedDayKey === dKey ? 'text-primary' : 'text-muted-foreground')}>{DAY_LABELS[di]}</div>
+                  <div className={cn('text-[9px]', selectedDayKey === dKey ? 'text-primary/80' : 'text-muted-foreground')}>{formatMonthDate(day)}</div>
                 </div>
               );
             })}
@@ -2305,6 +2437,7 @@ function WeekSection({
               dragState={dragState?.location === 'VU' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('VU')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
+              isUnschedulable={unschedulableDays[`VU-w${week.weekNumber}-d${di}`] ?? false}
               onMouseDown={onColumnMouseDown} onColumnHover={onColumnHover}
               onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
@@ -2358,6 +2491,7 @@ function WeekSection({
               dragState={dragState?.location === 'UT' && dragState?.weekNumber === week.weekNumber ? dragState : null}
               locked={lockedLocations.has('UT')} colRefs={colRefs} hasActiveCourse={hasActiveCourse}
               activeSyncGroupId={activeSyncGroupId} activeSyncLocation={activeSyncLocation}
+              isUnschedulable={unschedulableDays[`UT-w${week.weekNumber}-d${di}`] ?? false}
               onMouseDown={onColumnMouseDown} onColumnHover={onColumnHover}
               onBlockMouseDown={onBlockMouseDown} onResizeMouseDown={onResizeMouseDown} onSelectBlock={onSelectBlock}
               getCourseColor={getCourseColor} getCourseName={getCourseName}
@@ -2424,9 +2558,10 @@ function WeekSection({
 interface DayNoteEditorProps {
   dayKey: string; note: string;
   onChangeNote: (v: string) => void; onSaveNote: () => void; onClearNote: () => void;
+  isUnschedulable: boolean; onToggleUnschedulable: () => void;
 }
 
-function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote, onClearNote }: DayNoteEditorProps) {
+function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote, onClearNote, isUnschedulable, onToggleUnschedulable }: DayNoteEditorProps) {
   const parsed = parseDayKey(dayKey);
   const [initialNote] = useState(note);
   return (
@@ -2437,6 +2572,15 @@ function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote, onClearNote }: 
           <span className="text-xs text-muted-foreground">W{parsed.weekNumber} · {DAY_LABELS[parsed.dayOfWeek]}</span>
         </div>
       )}
+      <div className="flex items-center justify-between">
+        <Label className="text-[10px] cursor-pointer" htmlFor="unschedulable-toggle">Mark Unschedulable</Label>
+        <Switch
+          id="unschedulable-toggle"
+          checked={isUnschedulable}
+          onCheckedChange={onToggleUnschedulable}
+          className="h-4 w-7 [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-3"
+        />
+      </div>
       <div className="space-y-1">
         <Label className="text-[10px]">Day Note</Label>
         <Textarea
@@ -2452,6 +2596,63 @@ function DayNoteEditor({ dayKey, note, onChangeNote, onSaveNote, onClearNote }: 
             <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={onSaveNote}>Confirm</Button>
           )}
           <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={onClearNote}>Clear</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Multi-Day Panel ───────────────────────────────────── */
+interface MultiDayPanelProps {
+  count: number;
+  noteValue: string | null;
+  unschedulableValue: boolean | null;
+  editNote: string;
+  onChangeNote: (v: string) => void;
+  onSaveNotes: () => void;
+  onClearNotes: () => void;
+  onSetUnschedulable: (v: boolean) => void;
+  onClearSelection: () => void;
+}
+
+function MultiDayPanel({ count, noteValue, unschedulableValue, editNote, onChangeNote, onSaveNotes, onClearNotes, onSetUnschedulable, onClearSelection }: MultiDayPanelProps) {
+  return (
+    <div className="space-y-2 pt-0.5" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold">{count} days selected</span>
+        <button onClick={onClearSelection} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">Clear</button>
+      </div>
+      <div className="flex items-center justify-between">
+        <Label className="text-[10px]">Mark Unschedulable</Label>
+        <div className="flex gap-1">
+          <Button
+            size="sm"
+            variant={unschedulableValue === true ? 'default' : 'outline'}
+            className="text-[10px] px-2 py-0 leading-none"
+            style={{ height: '18px', minHeight: '18px' }}
+            onClick={() => onSetUnschedulable(true)}
+          >On</Button>
+          <Button
+            size="sm"
+            variant={unschedulableValue === false ? 'default' : 'outline'}
+            className="text-[10px] px-2 py-0 leading-none"
+            style={{ height: '18px', minHeight: '18px' }}
+            onClick={() => onSetUnschedulable(false)}
+          >Off</Button>
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-[10px]">Day Note</Label>
+        <Textarea
+          value={editNote}
+          onChange={e => onChangeNote(e.target.value)}
+          placeholder={noteValue === null ? '(multiple values)' : 'Add a note for these days…'}
+          className="text-xs min-h-[48px] resize-none"
+          rows={2}
+        />
+        <div className="flex gap-1.5" style={{ marginTop: '0.5rem' }}>
+          <Button size="sm" variant="secondary" className="flex-1 text-[10px] px-2 py-0 leading-none" style={{ height: '18px', minHeight: '18px' }} onClick={onSaveNotes}>Apply to all</Button>
+          <Button size="sm" variant="outline" className="text-[10px] px-2 py-0 leading-none border-border/60" style={{ height: '18px', minHeight: '18px' }} onClick={onClearNotes}>Clear all</Button>
         </div>
       </div>
     </div>
@@ -2485,6 +2686,7 @@ interface DayColumnProps {
   activeSyncGroupId: string | null;
   activeSyncLocation: Location | null;
   colRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  isUnschedulable: boolean;
   onMouseDown: (e: React.MouseEvent, loc: Location, wn: number, d: number) => void;
   onColumnHover: (col: { location: Location; weekNumber: number; dayOfWeek: number } | null) => void;
   onBlockMouseDown: (e: React.MouseEvent, block: TimeBlock) => void;
@@ -2498,6 +2700,7 @@ function DayColumn({
   location, weekNumber, dayOfWeek, blocks,
   selectedBlockIds, syncMode, syncPairId,
   dragState, locked, hasActiveCourse, activeSyncGroupId, activeSyncLocation, colRefs,
+  isUnschedulable,
   onMouseDown, onColumnHover, onBlockMouseDown, onResizeMouseDown, onSelectBlock,
   getCourseColor, getCourseName,
 }: DayColumnProps) {
@@ -2545,6 +2748,15 @@ function DayColumn({
         }
       }}
     >
+      {isUnschedulable && (
+        <div
+          className="absolute inset-0 pointer-events-none z-10"
+          style={{
+            backgroundImage: 'repeating-linear-gradient(-45deg, transparent, transparent 6px, rgba(0,0,0,0.07) 6px, rgba(0,0,0,0.07) 8px)',
+          }}
+        />
+      )}
+
       {dragState?.type === 'create' && dragState.dayOfWeek === dayOfWeek && dragPreview && (
         <div className="absolute left-0.5 right-0.5 bg-primary/20 border border-primary/50 rounded-sm pointer-events-none z-20"
           style={{ top: dragPreview.top, height: dragPreview.height }} />
@@ -2591,7 +2803,7 @@ function DayColumn({
             className={cn(
               'absolute rounded-sm overflow-hidden z-10 transition-[shadow,opacity]',
               isBeingMoved && 'opacity-80 shadow-lg z-30',
-              isSelected && 'ring-2 ring-primary ring-offset-0 z-20',
+              isSelected && `${SEL.ring} z-20`,
               isSyncPair && 'ring-2 ring-orange-400 z-20',
               isSyncTarget && 'ring-2 ring-green-500 animate-pulse z-20',
               isTravel && 'opacity-60',
