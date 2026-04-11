@@ -1514,7 +1514,7 @@ export default function Planner() {
                     value={editMultiPlace}
                     onChange={e => setEditMultiPlace(e.target.value)}
                     onBlur={saveMultiPlace}
-                    placeholder={multiPlaceValue === null ? '(multiple values)' : 'e.g. NU-3A22'}
+                    placeholder={multiPlaceValue === null ? '(multiple values)' : 'Add location...'}
                     className="h-7 text-xs"
                   />
                 </div>
@@ -2131,7 +2131,7 @@ function BlockDetails({
           value={editPlace}
           onChange={e => onEditPlace(e.target.value)}
           onBlur={onSavePlace}
-          placeholder="e.g. NU-3A22"
+          placeholder="Add location..."
           className="h-7 text-xs"
         />
       </div>
