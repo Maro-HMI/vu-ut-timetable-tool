@@ -52,14 +52,42 @@ function sanitizeName(name: string) {
   return name.replace(/[^a-z0-9_-]/gi, '_');
 }
 
+interface HistoryState {
+  present: AppData;
+  undo: AppData | null;
+  redo: AppData | null;
+}
+
 export function useAppData() {
-  const [data, setData] = useState<AppData>(load);
+  const [hist, setHist] = useState<HistoryState>(() => ({
+    present: load(),
+    undo: null,
+    redo: null,
+  }));
+
+  const data = hist.present;
 
   const update = useCallback((updater: (prev: AppData) => AppData) => {
-    setData(prev => {
-      const next = updater(prev);
+    setHist(prev => {
+      const next = updater(prev.present);
       persist(next);
-      return next;
+      return { present: next, undo: prev.present, redo: null };
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    setHist(prev => {
+      if (!prev.undo) return prev;
+      persist(prev.undo);
+      return { present: prev.undo, undo: null, redo: prev.present };
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setHist(prev => {
+      if (!prev.redo) return prev;
+      persist(prev.redo);
+      return { present: prev.redo, undo: prev.present, redo: null };
     });
   }, []);
 
@@ -84,7 +112,7 @@ export function useAppData() {
             cabinBookings: parsed.cabinBookings ?? [],
             unschedulableDays: parsed.unschedulableDays ?? {},
           };
-          setData(normalized);
+          setHist({ present: normalized, undo: null, redo: null });
           persist(normalized);
           resolve();
         } catch {
@@ -98,7 +126,7 @@ export function useAppData() {
 
   const reset = useCallback(() => {
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
-    setData(defaultData);
+    setHist({ present: defaultData, undo: null, redo: null });
   }, []);
 
   // ── Location-specific export/import ───────────────────
@@ -190,6 +218,9 @@ export function useAppData() {
 
   return {
     data, update, reset,
+    undo, redo,
+    canUndo: hist.undo !== null,
+    canRedo: hist.redo !== null,
     exportToFile, importFromFile,
     exportLocationToFile, importLocationFromFile,
     exportCourseToFile, importCourseFromFile,

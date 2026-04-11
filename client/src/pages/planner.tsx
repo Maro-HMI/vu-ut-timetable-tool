@@ -217,7 +217,8 @@ function ModuleDialog({
 export default function Planner() {
   const { data, update, exportToFile, importFromFile, reset,
           exportLocationToFile, importLocationFromFile,
-          exportCourseToFile, importCourseFromFile } = useAppData();
+          exportCourseToFile, importCourseFromFile,
+          undo, redo } = useAppData();
 
   const [activeCourseId, setActiveCourseId]   = useState<string | null>(null);
   const [hiddenCourseIds, setHiddenCourseIds] = useState<Set<string>>(new Set());
@@ -294,6 +295,8 @@ export default function Planner() {
   const scrollContainerRef    = useRef<HTMLDivElement>(null);
   const vuUtHeaderRef         = useRef<HTMLDivElement>(null);
   const allSelectedIdsRef     = useRef<Set<string>>(new Set());
+  const undoRef               = useRef(undo);
+  const redoRef               = useRef(redo);
 
   useEffect(() => { dragStateRef.current = dragState; },             [dragState]);
   useEffect(() => { activeCourseRef.current = activeCourseId; },     [activeCourseId]);
@@ -306,6 +309,8 @@ export default function Planner() {
   useEffect(() => { cabinDragStateRef.current = cabinDragState; }, [cabinDragState]);
   useEffect(() => { cabinResizeStateRef.current = cabinResizeState; }, [cabinResizeState]);
   useEffect(() => { marqueeStateRef.current = marqueeState; }, [marqueeState]);
+  useEffect(() => { undoRef.current = undo; }, [undo]);
+  useEffect(() => { redoRef.current = redo; }, [redo]);
 
   /* Derived */
   const weeks = useMemo(() => {
@@ -676,6 +681,18 @@ export default function Planner() {
           setSelectedBlockId(newBlock.id);
           e.preventDefault();
         }
+      } else if (mod && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        undoRef.current();
+        setSelectedBlockId(null);
+        setExtraSelectedIds(new Set());
+        setSelectedCabinId(null);
+        e.preventDefault();
+      } else if (mod && ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) || (!e.shiftKey && (e.key === 'y' || e.key === 'Y')))) {
+        redoRef.current();
+        setSelectedBlockId(null);
+        setExtraSelectedIds(new Set());
+        setSelectedCabinId(null);
+        e.preventDefault();
       }
     };
     document.addEventListener('keydown', onKeyDown);
