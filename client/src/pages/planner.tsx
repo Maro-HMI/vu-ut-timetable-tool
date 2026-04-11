@@ -2124,19 +2124,17 @@ function BlockDetails({
         </div>
       </div>
 
-      {/* Place / room label – not shown for Travel */}
-      {block.courseId !== TRAVEL_ID && (
-        <div className="space-y-0.5">
-          <Label className="text-[10px] text-muted-foreground">Location</Label>
-          <Input
-            value={editPlace}
-            onChange={e => onEditPlace(e.target.value)}
-            onBlur={onSavePlace}
-            placeholder="e.g. NU-3A22"
-            className="h-7 text-xs"
-          />
-        </div>
-      )}
+      {/* Place / room label */}
+      <div className="space-y-0.5">
+        <Label className="text-[10px] text-muted-foreground">Location</Label>
+        <Input
+          value={editPlace}
+          onChange={e => onEditPlace(e.target.value)}
+          onBlur={onSavePlace}
+          placeholder="e.g. NU-3A22"
+          className="h-7 text-xs"
+        />
+      </div>
 
       {/* At Twente – VU blocks only */}
       {isVUBlock && (
